@@ -1,0 +1,13 @@
+[project]
+name = "usc"
+version = "0.0.1"
+description = "Unified State Codec (USC) — compress memory, KV cache, and weights"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.scripts]
+usc = "usc.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"

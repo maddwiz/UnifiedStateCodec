@@ -3,23 +3,21 @@ from typing import List
 
 def probe_truth_spine(header: str, goal: str, witnesses: List[str]) -> bool:
     """
-    v0 probe:
-    Super simple checks that catch obvious drift.
+    Chunk-friendly probe.
 
-    Later we will add:
-    - entity consistency checks
-    - timeline sanity checks
-    - tool-call correctness checks
+    Old version expected every decode to start with:
+      Project: ...
+      Goal: ...
+    That breaks for chunked logs (middle chunks won't have that).
+
+    New rule:
+    - allow ANY non-empty header/goal
+    - if witnesses exist, they must still be valid witness lines
     """
+    # Must have some content
     if not header.strip():
         return False
     if not goal.strip():
-        return False
-
-    # For our toy logs, header and goal should start like this:
-    if not header.startswith("Project:"):
-        return False
-    if not goal.startswith("Goal:"):
         return False
 
     # Witness lines must still look like witnesses
@@ -32,9 +30,10 @@ def probe_truth_spine(header: str, goal: str, witnesses: List[str]) -> bool:
 
 def confidence_score(tier: int, probe_ok: bool) -> float:
     """
-    v0 confidence model:
-    - tier 3 (lossless) is always higher confidence than tier 0.
-    - probe must pass.
+    v1 confidence model:
+    - probe must pass
+    - tier 3 (lossless) = high confidence
+    - tier 0 (tiny) = medium confidence
     """
     if not probe_ok:
         return 0.0

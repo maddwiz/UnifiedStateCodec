@@ -1,70 +1,60 @@
-# MASTER HANDOFF — USC (Unified State Codec)
+# USC — MASTER HANDOFF (v0.1)
 
-## What USC is
-USC compresses AI “state” across:
-1) Agent memory (logs / experiences)
-2) KV-cache (inference memory)
-3) Weights (static model storage)
-
-Core idea:
-Predict → store truth spine → store residual surprises → verify → commit.
-Decode loop:
-Verify → (Repair / Upgrade Tier) → Commit (never silently fails).
+## What this repo is
+USC (Unified State Codec) is a compression system designed for AI memory logs and agent traces.
+It prioritizes:
+- Structured compression
+- Future selective recall + partial decoding
+- AI-native extensions beyond gzip
 
 ---
 
-## Current milestone
-✅ M1 complete: USC-MEM v0.7 (auto-tier + commit loop)
+## Current state (as of this commit)
+### ✅ New best method on VARIED benchmark
+- Best custom packer: **TMTFDO**
+  - Template extraction
+  - MTF ordering of template IDs
+  - Bitpacked MTF positions
+  - Delta-only values after first occurrence (per template ID stream)
+
+### ✅ MetaPack upgraded
+MetaPack now includes TMTFDO and correctly selects the best method.
 
 ---
 
-## What works right now (CONFIRMED)
-### USC-MEM v0.7:
-- Tier 3 (lossless): roundtrip exact ✅
-- Tier 0 (tiny): compresses strongly ✅
-- Light ECC: truth spine verification ✅
-- Fingerprint: behavior-id verification ✅
-- Probes + confidence scoring ✅
-- Confidence gate: refuses silent hallucination ✅
-- Auto-tier escalation:
-  - Try Tier 0 first
-  - Upgrade to Tier 3 if confidence too low ✅
-- Commit loop:
-  - Writes committed decode to `usc_commits.jsonl` ✅
-  - Can load last commit ✅
+## Latest benchmark snapshot
+From `usc bench --toy`
 
-Tests:
-- `pytest` passes (5 tests)
+### REPEAT-HEAVY
+- GZIP bytes: 527
+- DICTPACK bytes: 575
+- METAPACK bytes: 577
+- TMTFDO bytes: 665
 
-Bench:
-- `usc bench --toy` prints sizes + confidence + used tier + commit info
+### VARIED (fair USC test)
+- GZIP bytes: 1495
+- TMTFB bytes: 1652
+- **TMTFDO bytes: 1651**
+- **METAPACK bytes: 1653**
 
 ---
 
-## Known limitations (EXPECTED)
-- Packets are still JSON+gzip (not optimal)
-- Tier 3 doesn’t beat gzip on small logs yet
-- Tier 0 is not lossless (by design)
-- No chunking for long logs yet
+## What matters
+- We are now in the “micro-optimizations near ceiling” zone.
+- Small byte improvements are expected until we introduce a new compression class:
+  - canonicalization
+  - persistent dictionaries
+  - semantic/event object encoding
+  - utility-based lossy compression
 
 ---
 
-## Next steps (5-year-old mode roadmap)
-M2 — USC-MEM v1.0 upgrades:
-1) Add chunking (long logs)
-2) Replace JSON with compact binary packet format
-3) Add dictionary coding backend (better compression)
-4) Expand witnesses into structured fields (entities/goals/timestamps)
-5) Add multi-decode arbitration (two decoders compare)
-6) Add more probes (utility-based)
-7) Add “commit upgrade” (once Tier 3 decoded, store smaller stabilized Tier 0+patch)
+## Next task (immediate)
+Add a canonicalization pass BEFORE templating:
+- normalize whitespace
+- timestamp normalization
+- UUID shortening
+- consistent key ordering for JSON-ish lines
 
----
+Then re-run `usc bench --toy` to measure.
 
-## Commands you should use
-- Run tests:
-  `python -m pytest -q`
-- Run bench:
-  `usc bench --toy`
-- View commits:
-  `tail -n 5 usc_commits.jsonl`

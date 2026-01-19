@@ -1,114 +1,61 @@
-# USC Roadmap
+# USC — Unified State Codec
+## ROADMAP (v0.1)
 
-USC = Unified State Codec
-Compresses AI state across:
-- Agent memory (logs / experiences)
-- KV cache (inference memory)
-- Weights (model storage)
-
-Core principle:
-Predict → store truth spine → store residual surprises → verify → commit.
+USC is an AI-native compression stack focused on:
+- Agent memory logs + tool outputs
+- Structured recall (not just “smallest bytes”)
+- Selective decode + future utility-based lossy modes
 
 ---
 
-## Phase 0 — Foundation (M0) ✅ DONE
-Goal: repo exists, tests run, baseline benchmarks exist.
-
-Delivered:
-- Repo scaffold created
-- CLI works: `usc bench --toy`
-- Bench harness prints size metrics
-- Basic tests wired with pytest
-
-Exit criteria met:
-- `pytest` passes
-- `usc bench --toy` runs
+## ✅ Milestone 0 — Repo baseline (DONE)
+- Working CLI: `usc bench --toy`
+- Chunking + tiers (Tier0 / Tier3)
+- Multiple packers + MetaPack auto-selection
 
 ---
 
-## Phase 1 — USC-MEM (Agent Memory Codec)
+## ✅ Milestone 1 — Template family compression (DONE)
+### Completed packers
+- TEMPLATEPACK
+- TMTF (Template + MTF ordering)
+- TMTFB (TMTF + bitpacked positions)
+- TMTFDO (TMTFB + “delta-only values after first appearance”)
 
-### M1 — USC-MEM v0.7 ✅ DONE
-Built a tiered, verified, self-healing memory codec.
+### Result highlights
+VARIED benchmark best custom packer:
+- TMTFDO = 1651 bytes
+MetaPack after upgrade:
+- METAPACK = 1653 bytes (chooses best method)
 
-Delivered:
-- Tiering:
-  - Tier 3 = lossless
-  - Tier 0 = tiny utility memory
-- Light ECC (truth spine verification)
-- Fingerprint (behavior-id verification)
-- Probes + confidence scoring
-- Confidence gate (refuse silent hallucination)
-- Auto-tier escalation (Tier 0 → Tier 3 if needed)
-- Commit loop (writes known-good decode to `usc_commits.jsonl`)
-- Tests: 5 passed
+---
 
-Exit criteria met:
-- Tier 3 roundtrip exact
-- Tier 0 compresses strongly
-- Auto-tier successfully upgrades when confidence is low
-- Commit loop writes and loads records
-
-### M2 — USC-MEM v1.0 (Next)
-Goal: real structure + real compression wins.
+## 🎯 Milestone 2 — Bigger leaps (NEXT)
+Goal: bigger-than-1-byte improvements.
 
 Planned upgrades:
-- Chunking + rolling windows (long logs)
-- Compact binary packet format (not JSON)
-- Dictionary + entropy coding backend
-- Better witnesses (entities/goals/timestamps)
-- Multi-decode arbitration (two decoders, compare)
-- Semantic ECC v2 (constraints across events)
-- Probe suite expansion (utility-based)
+1) Canonicalization pass (normalize timestamps, UUIDs, whitespace)
+2) Per-template slot typing (int ranges, small enums)
+3) Residual dictionary for rare tokens (strings that don't template well)
+4) Persistent template tables across runs (cross-log reuse)
+5) Random access / partial decode blocks
 
 ---
 
-## Phase 2 — USC-KV (KV Cache Codec)
-
-### M3 — KV v0
-- Layer budgets + anchor retention
-- Basic importance scoring
-- Measure memory reduction vs accuracy
-
-### M4 — KV v1
-- Concept-indexed KV
-- Shared dictionaries across layers
-- Tiered KV precision + fallback
-
-### M5 — KV v2
-- Cross-layer latent KV field
-- Shared residual coder with USC-MEM
+## 🚀 Milestone 3 — “AI-native” memory features (FUTURE)
+- Utility-scored lossy compression modes (keep meaning, drop fluff)
+- Retrieval-friendly memory objects (events/entities/decisions)
+- Streaming codec mode
+- KV-cache memory compression layer (separate module)
 
 ---
 
-## Phase 3 — USC-W (Weights Codec)
+## 🧪 Milestone 4 — Real-world benchmarks (FUTURE)
+Add datasets:
+- Tool call logs
+- Multi-agent planner traces
+- JSON structured events
+- Mixed text + JSON hybrid
 
-### M6 — Weights v0
-- Transform + predictor + residual coding
-- Eval harness vs perplexity
+Target: match or beat gzip on at least one real agent dataset, while providing extra USC features gzip cannot.
 
-### M7 — Weights v1
-- Shared dictionaries + progressive decode
-- Fingerprint + probe evaluation
-
-### M8 — Weights v2
-- Training-aware compression
-- Utility-distortion tuning
-
----
-
-## Phase 4 — Unified USC Platform
-
-### M9 — One Codec System
-- Shared residual coder backend across memory/KV/weights
-- Unified probes + fingerprint framework
-- Single CLI: `usc mem`, `usc kv`, `usc weights`
-
----
-
-## Phase 5 — Publish + Integrate
-
-### M10 — Release
-- Benchmark suite
-- Paper draft
-- Integration hooks (vLLM / llama.cpp style)

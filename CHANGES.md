@@ -1,43 +1,18 @@
-# USC Changes Log
+# USC — CHANGES
 
-## Milestone M0 — Repo scaffold created ✅
-- Added ROADMAP.md
-- Added FILEMAP.md
-- Added MASTER_HANDOFF.md
-- Added CHANGES.md
-- Added Python package scaffold under src/usc/
-- Added CLI entry: `usc bench --toy`
-- Added basic pytest wiring
+## v0.6 — MetaPack + TMTFDO milestone
+- Added TMTFDO: TemplateMTFBitPack + DeltaOnly value encoding
+- Updated bench runner to print TMTFDO results
+- Updated MetaPack to include and select TMTFDO
+- Current best on VARIED dataset: TMTFDO = 1651 bytes
+- MetaPack now achieves 1653 bytes on VARIED by selecting TMTFDO
 
----
+## v0.5 — Position bitpacking milestone
+- Added TMTFB: TemplateMTF + bitpacked MTF positions
+- Improved VARIED from 1654 → 1652
 
-## Milestone M1 — USC-MEM v0.7 (Verified Tiering + Auto-Tier + Commit Loop) ✅
-Added a tiered memory codec with verification, confidence gating, self-healing escalation, and commit storage.
+## Experiments (non-winning, kept for research)
+- TMH: Huffman attempt (overhead too high for small streams)
+- TMTFBV: value bitpack attempt (header/bitwidth tax dominated)
+- TMTFBD: adaptive abs/delta attempt (did not beat TMTFDO)
 
-### Added / Updated
-- src/usc/mem/skeleton.py
-- src/usc/mem/witnesses.py
-- src/usc/mem/residuals.py
-- src/usc/mem/ecc.py (Light ECC checksum)
-- src/usc/mem/fingerprint.py
-- src/usc/mem/probes.py (probe checks + confidence scoring)
-- src/usc/mem/codec.py
-  - tiers (0,3)
-  - ECC + fingerprint verification
-  - probes + confidence gate
-  - auto-tier escalation helper
-- src/usc/mem/commit.py
-  - commit_memory() writes jsonl record
-  - load_last_commit() reads last record
-- src/usc/bench/runner.py
-  - prints tier sizes + confidence + auto-tier results
-  - writes commit records to usc_commits.jsonl
-- tests/test_mem_roundtrip.py
-  - lossless roundtrip test
-  - tier0 decode validity
-  - auto-tier escalation behavior
-  - commit store read/write
-
-### Result
-- `pytest` passes (5 tests)
-- `usc bench --toy` runs with confidence + auto-tier + commit loop

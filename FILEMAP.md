@@ -1,85 +1,69 @@
-# USC File Map
+# USC — FILEMAP (v0.1)
 
-## Root Files
-- README.md: project overview + quickstart
-- ROADMAP.md: milestones from start to finish
-- FILEMAP.md: what each folder/file does
-- MASTER_HANDOFF.md: current state + what works + what’s next
-- CHANGES.md: milestone-by-milestone log
-- usc_commits.jsonl: commit log created by bench runs (local file)
-
----
-
-## src/usc/
-Top-level Python package.
-
-### src/usc/cli.py
-Command line interface:
-- `usc bench --toy`
-
-### src/usc/common/
-Shared utilities (future):
-- types.py, hashing.py, logging.py (placeholders)
-
----
-
-## src/usc/mem/  ✅ USC-MEM ACTIVE MODULE
-Agent memory codec modules:
-
-- skeleton.py
-  Extracts minimal skeleton (header/goal)
-
-- witnesses.py
-  Extracts key truth pins (Decision/Note lines)
-
-- residuals.py
-  Stores remaining text (Tier 3 lossless)
-
-- ecc.py
-  Light ECC checksum over truth spine
-
-- fingerprint.py
-  Behavior-id fingerprint over truth spine
-
-- probes.py
-  Probe checks + confidence scoring
-
-- codec.py
-  Core encode/decode:
-  - tiers (0,3)
-  - ECC + fingerprint verification
-  - probes + confidence gate
-  - auto-tier escalation helper
-
-- commit.py
-  Commit loop storage:
-  - writes CommitRecord to jsonl
-  - reads last commit
-
----
-
-## src/usc/kv/
-KV-cache codec (planned):
-- budgets.py, anchors.py, quant.py, codec.py, probes.py
-
-## src/usc/weights/
-Weights codec (planned):
-- transforms.py, predictor.py, residuals.py, codec.py, benchmarks.py
+## Root
+- ROADMAP.md
+  - Project build plan + milestones
+- FILEMAP.md
+  - Repo structure map
+- MASTER_HANDOFF.md
+  - "Where we are right now" handoff for new chat windows
+- CHANGES.md
+  - Human-readable change log per milestone
 
 ---
 
 ## src/usc/bench/
-Bench harness + toy data:
-- datasets.py: toy logs
-- metrics.py: gzip + size reporting
-- runner.py: runs USC-MEM benchmarks (tiers + confidence + commit loop)
+- runner.py
+  - Main toy benchmark runner for comparing packers
+- datasets.py
+  - Toy log generators (repeat-heavy + varied)
+- metrics.py
+  - gzip baseline helper and ratios
 
 ---
 
-## tests/
-Pytest suite:
-- test_cli_smoke.py
-- test_mem_roundtrip.py (includes commit loop + auto-tier behavior)
+## src/usc/mem/
+Core compression library packers + utilities.
 
-## tools/
-Helper scripts (future)
+### Pack utilities
+- varint.py
+  - Unsigned varint encode/decode used across packet formats
+
+### Pack methods
+- dictpack.py
+  - Table + references (good on repeat-heavy)
+- tokenpack.py
+  - Token table approach
+- deltapack.py
+  - Delta compression for line changes
+- templatepack.py
+  - Template extraction + format slots
+- templatedelta.py
+  - Template-aware deltas
+- templaterle.py
+  - Run-length encoding for template ids
+- templatemtf.py
+  - Move-to-front encoding for template ids
+- templatemtf_bits.py
+  - TMTF + bitpacked template MTF positions
+- templatemtf_bits_deltaonly.py
+  - TMTFB + delta-only values after first occurrence (TMTFDO)
+- templatemtf_huff.py
+  - TemplateMTF + Huffman attempt (not currently winning)
+- templatemtf_bits_vals.py
+  - Value bitpacking attempt (not currently winning)
+- templatemtf_bits_tdelta.py
+  - Adaptive abs/delta attempt (not currently winning)
+- hybridpack.py
+  - Hybrid packer combining techniques
+- metapack.py
+  - Auto-selects best compressor among candidates
+
+---
+
+## src/usc/
+- cli.py
+  - CLI entry points
+- (other modules)
+  - USC tiered memory codec + decode fallback system
+

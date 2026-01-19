@@ -1,10 +1,18 @@
+# USC local memory commits (DO NOT COMMIT)
+usc_commits.jsonl
+
+# Python caches
 __pycache__/
 *.pyc
 *.pyo
-*.pyd
-*.egg-info/
-dist/
-build/
+
+# Pytest
+.pytest_cache/
+
+# Virtual envs
 .venv/
-.env
+venv/
+env/
+
+# OS junk
 .DS_Store

@@ -13,6 +13,7 @@ from usc.mem.templaterle import encode_chunks_with_template_rle
 from usc.mem.templatemtf import encode_chunks_with_template_mtf
 from usc.mem.templatemtf_bits import encode_chunks_with_template_mtf_bits
 from usc.mem.templatemtf_bits_deltaonly import encode_chunks_with_template_mtf_bits_deltaonly
+from usc.mem.templatemtf_bits_deltaonly_canon import encode_chunks_with_template_mtf_bits_deltaonly_canon
 from usc.mem.templatemtf_bits_vals import encode_chunks_with_template_mtf_bits_vals
 from usc.mem.templatemtf_huff import encode_chunks_with_template_mtf_huff
 from usc.mem.templatemtf_bits_tdelta import encode_chunks_with_template_mtf_bits_tdelta
@@ -72,6 +73,7 @@ def _bench_big(name: str, raw_big: str):
     tmtf_bytes = encode_chunks_with_template_mtf(chunks)
     tmtfb_bytes = encode_chunks_with_template_mtf_bits(chunks)
     tmtdo_bytes = encode_chunks_with_template_mtf_bits_deltaonly(chunks)
+    tmtdo_can_bytes = encode_chunks_with_template_mtf_bits_deltaonly_canon(chunks)
     tmtfbv_bytes = encode_chunks_with_template_mtf_bits_vals(chunks)
     tmh_bytes = encode_chunks_with_template_mtf_huff(chunks)
     tmtfbd_bytes = encode_chunks_with_template_mtf_bits_tdelta(chunks)
@@ -97,6 +99,7 @@ def _bench_big(name: str, raw_big: str):
     print(f"TMTF bytes          : {len(tmtf_bytes)}  (ratio {_ratio(len(raw_big_bytes), len(tmtf_bytes)):.2f}x)")
     print(f"TMTFB bytes         : {len(tmtfb_bytes)}  (ratio {_ratio(len(raw_big_bytes), len(tmtfb_bytes)):.2f}x)")
     print(f"TMTFDO bytes        : {len(tmtdo_bytes)}  (ratio {_ratio(len(raw_big_bytes), len(tmtdo_bytes)):.2f}x)")
+    print(f"TMTFDO_CAN bytes    : {len(tmtdo_can_bytes)}  (ratio {_ratio(len(raw_big_bytes), len(tmtdo_can_bytes)):.2f}x)")
     print(f"TMTFBV bytes        : {len(tmtfbv_bytes)}  (ratio {_ratio(len(raw_big_bytes), len(tmtfbv_bytes)):.2f}x)")
     print(f"TMH bytes           : {len(tmh_bytes)}  (ratio {_ratio(len(raw_big_bytes), len(tmh_bytes)):.2f}x)")
     print(f"TMTFBD bytes        : {len(tmtfbd_bytes)}  (ratio {_ratio(len(raw_big_bytes), len(tmtfbd_bytes)):.2f}x)")
@@ -134,9 +137,9 @@ def run_toy_bench():
     print("USC Bench — SMALL LOG (AUTO-TIER + COMMIT)")
     print("----------------------------------------")
     print(f"RAW bytes : {len(raw_small_bytes)}")
-    print(f"GZIP bytes: {len(gz_small)}  (ratio {_ratio(len(raw_small_bytes), len(gz_small)):.2f}x)")
-    print(f"TIER0 pkt : {len(pkt0_small)}  (ratio {_ratio(len(raw_small_bytes), len(pkt0_small)):.2f}x)")
-    print(f"TIER3 pkt : {len(pkt3_small)}  (ratio {_ratio(len(raw_small_bytes), len(pkt3_small)):.2f}x)")
+    print(f"GZIP bytes: {len(gz_small)}  (ratio {len(raw_small_bytes) / max(1, len(gz_small)):.2f}x)")
+    print(f"TIER0 pkt : {len(pkt0_small)}  (ratio {len(raw_small_bytes) / max(1, len(pkt0_small)):.2f}x)")
+    print(f"TIER3 pkt : {len(pkt3_small)}  (ratio {len(raw_small_bytes) / max(1, len(pkt3_small)):.2f}x)")
     print(f"AUTO used : tier {used_tier_small}  conf {conf_small:.2f}")
     print(f"Commit fp : {rec.text_fingerprint}")
     if last:

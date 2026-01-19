@@ -1,4 +1,4 @@
-# USC — FILEMAP (v0.1)
+# USC — FILEMAP (v0.2)
 
 ## Root
 - ROADMAP.md
@@ -25,6 +25,10 @@
 ## src/usc/mem/
 Core compression library packers + utilities.
 
+### Preprocessing
+- canonicalize.py
+  - Canonicalization layer (v0 lossy placeholders)
+
 ### Pack utilities
 - varint.py
   - Unsigned varint encode/decode used across packet formats
@@ -45,9 +49,11 @@ Core compression library packers + utilities.
 - templatemtf.py
   - Move-to-front encoding for template ids
 - templatemtf_bits.py
-  - TMTF + bitpacked template MTF positions
+  - TMTF + bitpacked MTF positions
 - templatemtf_bits_deltaonly.py
   - TMTFB + delta-only values after first occurrence (TMTFDO)
+- templatemtf_bits_deltaonly_canon.py
+  - TMTFDO + canonicalization preprocessing (TMTFDO_CAN)
 - templatemtf_huff.py
   - TemplateMTF + Huffman attempt (not currently winning)
 - templatemtf_bits_vals.py
@@ -66,4 +72,3 @@ Core compression library packers + utilities.
   - CLI entry points
 - (other modules)
   - USC tiered memory codec + decode fallback system
-

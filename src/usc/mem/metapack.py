@@ -12,9 +12,13 @@ from usc.mem.templatemtf_bits_deltaonly import (
     encode_chunks_with_template_mtf_bits_deltaonly,
     decode_chunks_with_template_mtf_bits_deltaonly,
 )
+from usc.mem.templatemtf_bits_deltaonly_canon import (
+    encode_chunks_with_template_mtf_bits_deltaonly_canon,
+    decode_chunks_with_template_mtf_bits_deltaonly_canon,
+)
 
 
-MAGIC = b"M"  # MetaPack v0.6 (includes TMTF + TMTFB + TMTFDO)
+MAGIC = b"M"  # MetaPack v0.7 (includes TMTFDO_CAN)
 
 
 # method ids
@@ -24,11 +28,12 @@ METHOD_HYBRIDPACK = 3
 METHOD_TMTF = 4
 METHOD_TMTFB = 6
 METHOD_TMTFDO = 7
+METHOD_TMTFDO_CAN = 8
 
 
 def encode_chunks_metapack(chunks: List[str]) -> bytes:
     """
-    MetaPack v0.6:
+    MetaPack v0.7:
     - Try multiple packers
     - Pick the smallest output
     - Store: 1 byte MAGIC + 1 byte method_id + payload_bytes
@@ -52,6 +57,9 @@ def encode_chunks_metapack(chunks: List[str]) -> bytes:
 
     mtfdo = encode_chunks_with_template_mtf_bits_deltaonly(chunks)
     candidates.append((METHOD_TMTFDO, mtfdo))
+
+    mtfdo_can = encode_chunks_with_template_mtf_bits_deltaonly_canon(chunks)
+    candidates.append((METHOD_TMTFDO_CAN, mtfdo_can))
 
     best_method, best_payload = min(candidates, key=lambda x: len(x[1]))
 
@@ -82,5 +90,8 @@ def decode_chunks_metapack(packet_bytes: bytes) -> List[str]:
 
     if method_id == METHOD_TMTFDO:
         return decode_chunks_with_template_mtf_bits_deltaonly(payload)
+
+    if method_id == METHOD_TMTFDO_CAN:
+        return decode_chunks_with_template_mtf_bits_deltaonly_canon(payload)
 
     raise ValueError("Unknown METAPACK method id")

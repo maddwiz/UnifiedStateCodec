@@ -1,5 +1,5 @@
 # USC — Unified State Codec
-## ROADMAP (v0.1)
+## ROADMAP (v0.2)
 
 USC is an AI-native compression stack focused on:
 - Agent memory logs + tool outputs
@@ -20,29 +20,49 @@ USC is an AI-native compression stack focused on:
 - TEMPLATEPACK
 - TMTF (Template + MTF ordering)
 - TMTFB (TMTF + bitpacked positions)
-- TMTFDO (TMTFB + “delta-only values after first appearance”)
-
-### Result highlights
-VARIED benchmark best custom packer:
-- TMTFDO = 1651 bytes
-MetaPack after upgrade:
-- METAPACK = 1653 bytes (chooses best method)
+- TMTFDO (TMTFB + delta-only values after first appearance)
 
 ---
 
-## 🎯 Milestone 2 — Bigger leaps (NEXT)
-Goal: bigger-than-1-byte improvements.
+## ✅ Milestone 2 — Canonicalization Layer (DONE - v0)
+### What we added
+- Canonicalize logs BEFORE templating to increase repetition:
+  - timestamps → `<TS>`
+  - UUIDs → `<UUID>`
+  - long hex → `<HEX>`
+  - long ints → `<INT>`
+  - whitespace normalization
+
+### New best packer
+- **TMTFDO_CAN** (TMTFDO + Canonicalization)
+
+### Result highlights (`usc bench --toy`)
+VARIED benchmark best custom packer:
+- **TMTFDO_CAN = 1643 bytes**
+MetaPack after upgrade:
+- **METAPACK = 1645 bytes** (auto-selects best method)
+
+⚠️ Note: Canonicalization v0 is **lossy** (placeholders replace original values).
+Next milestone is to make canonicalization **lossless** by storing the stripped values
+in a compact side-stream + dictionary.
+
+---
+
+## 🎯 Milestone 3 — Bigger leaps (NEXT)
+Goal: stop “micro-wins” and consistently beat gzip/zstd on real agent traces.
 
 Planned upgrades:
-1) Canonicalization pass (normalize timestamps, UUIDs, whitespace)
-2) Per-template slot typing (int ranges, small enums)
-3) Residual dictionary for rare tokens (strings that don't template well)
-4) Persistent template tables across runs (cross-log reuse)
-5) Random access / partial decode blocks
+1) **Lossless canonicalization**
+   - Store stripped UUID/TS/HEX/INT values in a side-stream
+   - Dict + delta-only encoding per type stream
+2) Slot typing per template (ints, enums, small strings)
+3) Persistent dictionaries across runs (streaming)
+4) Random access / partial decode blocks
+5) Optional “utility lossy” modes (agent memory usefulness)
 
 ---
 
-## 🚀 Milestone 3 — “AI-native” memory features (FUTURE)
+## 🚀 Milestone 4 — AI-native memory features (FUTURE)
 - Utility-scored lossy compression modes (keep meaning, drop fluff)
 - Retrieval-friendly memory objects (events/entities/decisions)
 - Streaming codec mode
@@ -50,12 +70,11 @@ Planned upgrades:
 
 ---
 
-## 🧪 Milestone 4 — Real-world benchmarks (FUTURE)
+## 🧪 Milestone 5 — Real-world benchmarks (FUTURE)
 Add datasets:
 - Tool call logs
 - Multi-agent planner traces
 - JSON structured events
 - Mixed text + JSON hybrid
 
-Target: match or beat gzip on at least one real agent dataset, while providing extra USC features gzip cannot.
-
+Target: match or beat gzip/zstd on real agent datasets, while providing extra USC features gzip cannot.

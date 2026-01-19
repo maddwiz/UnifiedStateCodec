@@ -1,6 +1,11 @@
 # USC local memory commits (DO NOT COMMIT)
 usc_commits.jsonl
 
+# Python build artifacts
+*.egg-info/
+dist/
+build/
+
 # Python caches
 __pycache__/
 *.pyc

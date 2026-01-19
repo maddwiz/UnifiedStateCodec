@@ -1,3 +1,5 @@
+import gzip
+
 from usc.bench.datasets import toy_agent_log, toy_big_agent_log, toy_big_agent_log_varied
 from usc.bench.metrics import gzip_compress
 from usc.mem.codec import mem_encode, mem_decode_with_fallback
@@ -14,12 +16,22 @@ from usc.mem.templatemtf import encode_chunks_with_template_mtf
 from usc.mem.templatemtf_bits import encode_chunks_with_template_mtf_bits
 from usc.mem.templatemtf_bits_deltaonly import encode_chunks_with_template_mtf_bits_deltaonly
 from usc.mem.templatemtf_bits_deltaonly_canon import encode_chunks_with_template_mtf_bits_deltaonly_canon
+from usc.mem.templatemtf_bits_deltaonly_canon_zstd import (
+    encode_chunks_with_template_mtf_bits_deltaonly_canon as encode_chunks_with_template_mtf_bits_deltaonly_canon_zstd,
+)
+from usc.mem.templatemtf_bits_deltaonly_lcanon import encode_chunks_with_template_mtf_bits_deltaonly_lcanon
+from usc.mem.templatemtf_bits_deltaonly_lcand import encode_chunks_with_template_mtf_bits_deltaonly_lcand
+from usc.mem.templatemtf_bits_deltaonly_lcat import encode_chunks_with_template_mtf_bits_deltaonly_lcat
+from usc.mem.templatemtf_bits_deltaonly_lcatd import encode_chunks_with_template_mtf_bits_deltaonly_lcatd
+
 from usc.mem.templatemtf_bits_vals import encode_chunks_with_template_mtf_bits_vals
 from usc.mem.templatemtf_huff import encode_chunks_with_template_mtf_huff
 from usc.mem.templatemtf_bits_tdelta import encode_chunks_with_template_mtf_bits_tdelta
 
 from usc.mem.hybridpack import encode_chunks_hybrid
 from usc.mem.metapack import encode_chunks_metapack
+
+from usc.mem.zstd_codec import zstd_compress
 
 
 def _ratio(raw: int, comp: int) -> float:
@@ -31,11 +43,32 @@ def _is_important_chunk(text: str) -> bool:
     return any(m in text for m in markers)
 
 
+def _to_raw_if_gzip(data: bytes) -> bytes:
+    """
+    If bytes are gzip-compressed, decompress them.
+    Otherwise return as-is.
+    """
+    try:
+        return gzip.decompress(data)
+    except Exception:
+        return data
+
+
+def _repack_to_zstd(any_bytes: bytes, level: int = 10) -> bytes:
+    """
+    Robust repack:
+    - If incoming bytes are gzipped -> decompress -> zstd
+    - Else -> zstd directly
+    """
+    raw = _to_raw_if_gzip(any_bytes)
+    return zstd_compress(raw, level=level)
+
+
 def _bench_big(name: str, raw_big: str):
     raw_big_bytes = raw_big.encode("utf-8")
     gz_big = gzip_compress(raw_big_bytes)
 
-    chunks = [c.text for c in chunk_by_lines(raw_big, max_lines=10)]
+    chunks = [c.text for c in chunk_by_lines(raw_big, max_lines=25)]
 
     pkt0_total = 0
     pkt3_total = 0
@@ -73,12 +106,25 @@ def _bench_big(name: str, raw_big: str):
     tmtf_bytes = encode_chunks_with_template_mtf(chunks)
     tmtfb_bytes = encode_chunks_with_template_mtf_bits(chunks)
     tmtdo_bytes = encode_chunks_with_template_mtf_bits_deltaonly(chunks)
+
     tmtdo_can_bytes = encode_chunks_with_template_mtf_bits_deltaonly_canon(chunks)
+    tmtdo_canz_bytes = encode_chunks_with_template_mtf_bits_deltaonly_canon_zstd(chunks)
+
+    tmtdo_lcan_bytes = encode_chunks_with_template_mtf_bits_deltaonly_lcanon(chunks)
+    tmtdo_lcand_bytes = encode_chunks_with_template_mtf_bits_deltaonly_lcand(chunks)
+    tmtdo_lcat_bytes = encode_chunks_with_template_mtf_bits_deltaonly_lcat(chunks)
+    tmtdo_lcatd_bytes = encode_chunks_with_template_mtf_bits_deltaonly_lcatd(chunks)
+
     tmtfbv_bytes = encode_chunks_with_template_mtf_bits_vals(chunks)
     tmh_bytes = encode_chunks_with_template_mtf_huff(chunks)
     tmtfbd_bytes = encode_chunks_with_template_mtf_bits_tdelta(chunks)
+
     hybridpack_bytes = encode_chunks_hybrid(chunks)
     metapack_bytes = encode_chunks_metapack(chunks)
+
+    # repack through zstd (robust to gzip/non-gzip)
+    can_zstd = _repack_to_zstd(tmtdo_can_bytes, level=10)
+    meta_zstd = _repack_to_zstd(metapack_bytes, level=10)
 
     print(f"USC Bench — BIG LOG ({name})")
     print("----------------------------------------")
@@ -90,6 +136,7 @@ def _bench_big(name: str, raw_big: str):
     print(f"USC Tier0 total     : {pkt0_total}  (ratio {_ratio(len(raw_big_bytes), pkt0_total):.2f}x)")
     print(f"USC Tier3 total     : {pkt3_total}  (ratio {_ratio(len(raw_big_bytes), pkt3_total):.2f}x)")
     print(f"USC Auto-tier       : Tier0={used_tier_counts[0]}  Tier3={used_tier_counts[3]}")
+
     print(f"DICTPACK bytes      : {len(dictpack_bytes)}  (ratio {_ratio(len(raw_big_bytes), len(dictpack_bytes)):.2f}x)")
     print(f"TOKENPACK bytes     : {len(tokenpack_bytes)}  (ratio {_ratio(len(raw_big_bytes), len(tokenpack_bytes)):.2f}x)")
     print(f"DELTAPACK bytes     : {len(deltapack_bytes)}  (ratio {_ratio(len(raw_big_bytes), len(deltapack_bytes)):.2f}x)")
@@ -99,12 +146,24 @@ def _bench_big(name: str, raw_big: str):
     print(f"TMTF bytes          : {len(tmtf_bytes)}  (ratio {_ratio(len(raw_big_bytes), len(tmtf_bytes)):.2f}x)")
     print(f"TMTFB bytes         : {len(tmtfb_bytes)}  (ratio {_ratio(len(raw_big_bytes), len(tmtfb_bytes)):.2f}x)")
     print(f"TMTFDO bytes        : {len(tmtdo_bytes)}  (ratio {_ratio(len(raw_big_bytes), len(tmtdo_bytes)):.2f}x)")
+
     print(f"TMTFDO_CAN bytes    : {len(tmtdo_can_bytes)}  (ratio {_ratio(len(raw_big_bytes), len(tmtdo_can_bytes)):.2f}x)")
+    print(f"TMTFDO_CANZ bytes   : {len(tmtdo_canz_bytes)}  (ratio {_ratio(len(raw_big_bytes), len(tmtdo_canz_bytes)):.2f}x)")
+
+    print(f"TMTFDO_LCAN bytes   : {len(tmtdo_lcan_bytes)}  (ratio {_ratio(len(raw_big_bytes), len(tmtdo_lcan_bytes)):.2f}x)")
+    print(f"TMTFDO_LCAND bytes  : {len(tmtdo_lcand_bytes)}  (ratio {_ratio(len(raw_big_bytes), len(tmtdo_lcand_bytes)):.2f}x)")
+    print(f"TMTFDO_LCAT bytes   : {len(tmtdo_lcat_bytes)}  (ratio {_ratio(len(raw_big_bytes), len(tmtdo_lcat_bytes)):.2f}x)")
+    print(f"TMTFDO_LCATD bytes  : {len(tmtdo_lcatd_bytes)}  (ratio {_ratio(len(raw_big_bytes), len(tmtdo_lcatd_bytes)):.2f}x)")
+
     print(f"TMTFBV bytes        : {len(tmtfbv_bytes)}  (ratio {_ratio(len(raw_big_bytes), len(tmtfbv_bytes)):.2f}x)")
     print(f"TMH bytes           : {len(tmh_bytes)}  (ratio {_ratio(len(raw_big_bytes), len(tmh_bytes)):.2f}x)")
     print(f"TMTFBD bytes        : {len(tmtfbd_bytes)}  (ratio {_ratio(len(raw_big_bytes), len(tmtfbd_bytes)):.2f}x)")
     print(f"HYBRIDPACK bytes    : {len(hybridpack_bytes)}  (ratio {_ratio(len(raw_big_bytes), len(hybridpack_bytes)):.2f}x)")
     print(f"METAPACK bytes      : {len(metapack_bytes)}  (ratio {_ratio(len(raw_big_bytes), len(metapack_bytes)):.2f}x)")
+
+    print("----------------------------------------")
+    print(f"REPACK ZSTD (CAN)   : {len(can_zstd)}  (ratio {_ratio(len(raw_big_bytes), len(can_zstd)):.2f}x)")
+    print(f"REPACK ZSTD (META)  : {len(meta_zstd)}  (ratio {_ratio(len(raw_big_bytes), len(meta_zstd)):.2f}x)")
     print("----------------------------------------")
     print()
 

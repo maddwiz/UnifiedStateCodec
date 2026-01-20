@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import List, Tuple
 
 import zstandard as zstd
 
@@ -21,8 +21,8 @@ def _u32(x: int) -> bytes:
     return int(x).to_bytes(4, "little", signed=False)
 
 
-def _read_u32(buf: bytes, off: int) -> tuple[int, int]:
-    return int.from_bytes(buf[off:off+4], "little", signed=False), off + 4
+def _read_u32(buf: bytes, off: int) -> Tuple[int, int]:
+    return int.from_bytes(buf[off:off + 4], "little", signed=False), off + 4
 
 
 def pack_packets(packets: List[bytes]) -> bytes:
@@ -45,20 +45,18 @@ def unpack_packets(blob: bytes) -> List[bytes]:
     out: List[bytes] = []
     for _ in range(n):
         ln, off = _read_u32(blob, off)
-        out.append(blob[off:off+ln])
+        out.append(blob[off:off + ln])
         off += ln
     return out
 
 
-def compress_outerstream(packets: List[bytes], level: int = 10) -> tuple[bytes, OuterStreamMeta]:
+def compress_outerstream(packets: List[bytes], level: int = 10) -> Tuple[bytes, OuterStreamMeta]:
     """
-    OuterStream:
-      - frame all packets
-      - compress framed bytes with zstd
-      - store simple header
-
     Bytes:
       [MAGIC 8B][level u32][raw_len u32][comp_len u32][zstd_bytes...]
+
+    NOTE:
+      MAGIC length is 8 bytes (b"USC_OUT1")
     """
     raw = pack_packets(packets)
     cctx = zstd.ZstdCompressor(level=level)
@@ -81,20 +79,17 @@ def compress_outerstream(packets: List[bytes], level: int = 10) -> tuple[bytes, 
 
 
 def decompress_outerstream(blob: bytes) -> List[bytes]:
-    """
-    Reverse of compress_outerstream.
-    """
     if len(blob) < 8 + 4 + 4 + 4:
         raise ValueError("outerstream: blob too small")
     if blob[:8] != MAGIC:
         raise ValueError("outerstream: bad magic")
 
     off = 8
-    level, off = _read_u32(blob, off)
+    _level, off = _read_u32(blob, off)
     raw_len, off = _read_u32(blob, off)
     comp_len, off = _read_u32(blob, off)
 
-    comp = blob[off:off+comp_len]
+    comp = blob[off:off + comp_len]
 
     dctx = zstd.ZstdDecompressor()
     raw = dctx.decompress(comp)

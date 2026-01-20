@@ -1,74 +1,67 @@
-# USC — FILEMAP (v0.2)
+# USC — Repo File Map
+
+This file explains where everything lives.
+
+---
 
 ## Root
-- ROADMAP.md
-  - Project build plan + milestones
-- FILEMAP.md
-  - Repo structure map
-- MASTER_HANDOFF.md
-  - "Where we are right now" handoff for new chat windows
-- CHANGES.md
-  - Human-readable change log per milestone
+- `ROADMAP.md` — project plan + phases
+- `FILEMAP.md` — this map
+- `MASTER_HANDOFF.md` — handoff summary (what works, how to run)
+- `CHANGES.md` — milestone log + what changed each time
 
 ---
 
-## src/usc/bench/
-- runner.py
-  - Main toy benchmark runner for comparing packers
-- datasets.py
-  - Toy log generators (repeat-heavy + varied)
-- metrics.py
-  - gzip baseline helper and ratios
+## Core Code
+### `src/usc/mem/`
+Compression modules (the heart of USC)
+
+Key files:
+- `templatepack.py`
+  - `_extract_template(...)` template + values extractor used across codecs
+- `templatemtf_bits_deltaonly_canon.py`
+  - "CAN" codec (canonicalized)
+- `templatemtf_bits_deltaonly_canon_zstd.py`
+  - "CANZ" codec (CAN + zstd backend) ✅ best batch codec
+- `zstd_codec.py`
+  - zstd compress/decompress helper
+- `stream_window_canz.py`
+  - stream-window prototype (v1)
+- `stream_window_canz_v2.py`
+  - stream-window with arity stored once (removes nvals) ✅ improved stream window
+- `stream_proto_canz_v3.py`
+  - ✅ DICT + DATA protocol (USC-LSP v3) **major breakthrough**
+- `canonicalize_lossless.py`
+  - lossless canonicalization experiments
+- `canonicalize_typed_lossless.py`
+  - typed canonicalization experiments
 
 ---
 
-## src/usc/mem/
-Core compression library packers + utilities.
+## Benchmarks
+### `src/usc/bench/`
+Benchmark scripts used to test progress
 
-### Preprocessing
-- canonicalize.py
-  - Canonicalization layer (v0 lossy placeholders)
-
-### Pack utilities
-- varint.py
-  - Unsigned varint encode/decode used across packet formats
-
-### Pack methods
-- dictpack.py
-  - Table + references (good on repeat-heavy)
-- tokenpack.py
-  - Token table approach
-- deltapack.py
-  - Delta compression for line changes
-- templatepack.py
-  - Template extraction + format slots
-- templatedelta.py
-  - Template-aware deltas
-- templaterle.py
-  - Run-length encoding for template ids
-- templatemtf.py
-  - Move-to-front encoding for template ids
-- templatemtf_bits.py
-  - TMTF + bitpacked MTF positions
-- templatemtf_bits_deltaonly.py
-  - TMTFB + delta-only values after first occurrence (TMTFDO)
-- templatemtf_bits_deltaonly_canon.py
-  - TMTFDO + canonicalization preprocessing (TMTFDO_CAN)
-- templatemtf_huff.py
-  - TemplateMTF + Huffman attempt (not currently winning)
-- templatemtf_bits_vals.py
-  - Value bitpacking attempt (not currently winning)
-- templatemtf_bits_tdelta.py
-  - Adaptive abs/delta attempt (not currently winning)
-- hybridpack.py
-  - Hybrid packer combining techniques
-- metapack.py
-  - Auto-selects best compressor among candidates
+Key files:
+- `runner.py`
+  - main CLI bench logic (`usc bench --toy`) ✅ default chunking set to 25
+- `sweep.py`
+  - chunk size sweep test (10 / 25 / 50 / 100 / 200)
+- `stream_bench.py` / `stream_bench2.py` / `stream_bench3.py` / `stream_bench4.py`
+  - streaming experiments and progression
+- `stream_bench5.py`
+  - ✅ DICT+DATA protocol benchmark (FIRST RUN vs STEADY)
 
 ---
 
-## src/usc/
-- cli.py
-  - CLI entry points
-- (other modules)
-  - USC tiered memory codec + decode fallback system
+## CLI (entry points)
+Depends on current repo structure. The bench command used:
+- `usc bench --toy`
+
+---
+
+## Naming
+- `CAN`  = canonicalized batch encoding
+- `CANZ` = CAN + zstd backend
+- `USC-LSP v3` = DICT+DATA streaming protocol
+

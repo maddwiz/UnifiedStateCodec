@@ -1,25 +1,47 @@
-# USC — CHANGES
+# CHANGES — USC (Unified State Codec)
 
-## v0.7 — Canonicalization + MetaPack upgrade
-- Added `canonicalize.py` (lossy v0 placeholder normalization)
-- Added `templatemtf_bits_deltaonly_canon.py` (TMTFDO_CAN)
-- Bench results improved:
-  - VARIED: TMTFDO 1651 → **TMTFDO_CAN 1643**
-  - REPEAT: TMTFDO 665 → **TMTFDO_CAN 657**
-- MetaPack upgraded to include canonicalized variant:
-  - VARIED: METAPACK now **1645** (auto-selects best method)
+This is the running change log. Update after major milestones.
 
-## v0.6 — MetaPack + TMTFDO milestone
-- Added TMTFDO: TemplateMTFBitPack + DeltaOnly value encoding
-- Updated bench runner to print TMTFDO results
-- Updated MetaPack to include and select TMTFDO
-- Best on VARIED before canon: TMTFDO = 1651 bytes
+---
 
-## v0.5 — Position bitpacking milestone
-- Added TMTFB: TemplateMTF + bitpacked MTF positions
-- Improved VARIED from 1654 → 1652
+## 2026-01-19 — USC-LSP v3: DICT + DATA protocol ✅
+### What changed
+- Added stateful streaming protocol split into:
+  - DICT packet (templates + arity once)
+  - DATA packet (MTF positions + delta-only values forever)
+- Added stream bench suite and chunk sweep testing
+- Added zstd backend integration
 
-## Experiments (non-winning, kept for research)
-- TMH: Huffman attempt (overhead too high for small streams)
-- TMTFBV: value bitpack attempt (header/bitwidth tax dominated)
-- TMTFBD: adaptive abs/delta attempt (did not beat TMTFDO_CAN)
+### Why it matters
+This enables:
+- long-lived compression that improves over time
+- tiny steady-state packets (ideal for agent memory + recall)
+
+### Results (toy VARIED big log)
+- RAW: 13587
+- GZIP: 1495
+- CANZ batch: 1545
+- DICT+DATA first: 1537
+- DICT+DATA steady: 189
+
+---
+
+## 2026-01-19 — Stream window v2 (remove nvals) ✅
+### What changed
+- Stored template arity once
+- Removed per-chunk `nvals` varints
+
+### Impact
+- Slight reduction in stream tax (example: ~10 bytes saved on toy test)
+
+---
+
+## 2026-01-19 — Bench sweep added ✅
+### What changed
+- Added chunk-size sweep bench: 10 / 25 / 50 / 100 / 200
+
+### Findings
+- 25 lines per chunk is best for VARIED dataset
+- Too small = overhead dominates
+- Too large = template explosion + value drift
+

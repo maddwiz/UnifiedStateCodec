@@ -1,80 +1,118 @@
-# USC — Unified State Codec
-## ROADMAP (v0.2)
+# USC — Unified State Codec (USC-LSP)
+A compression + memory protocol built for AI agent traces, logs, and structured recall.
 
-USC is an AI-native compression stack focused on:
-- Agent memory logs + tool outputs
-- Structured recall (not just “smallest bytes”)
-- Selective decode + future utility-based lossy modes
-
----
-
-## ✅ Milestone 0 — Repo baseline (DONE)
-- Working CLI: `usc bench --toy`
-- Chunking + tiers (Tier0 / Tier3)
-- Multiple packers + MetaPack auto-selection
+## Mission
+Build the best AI-native compression system by combining:
+- **Structure extraction** (templates + values)
+- **Streaming memory** (stateful, long-lived dictionaries)
+- **Delta-only encoding** (changes over time)
+- **Entropy backend** (zstd)  
+So we can beat generic compressors *in the real AI setting*: long-running agent traces.
 
 ---
 
-## ✅ Milestone 1 — Template family compression (DONE)
-### Completed packers
-- TEMPLATEPACK
-- TMTF (Template + MTF ordering)
-- TMTFB (TMTF + bitpacked positions)
-- TMTFDO (TMTFB + delta-only values after first appearance)
+## Current Status (✅ Working Today)
+### Best known results (toy benchmarks)
+VARIED big log:
+- RAW: 13,587 bytes
+- GZIP: 1,495 bytes
+- **CANZ batch @25 lines**: 1,545 bytes  (only +50 vs gzip)
+- **DICT+DATA first run**: 1,537 bytes  (only +42 vs gzip)
+- **DICT+DATA steady-state**: 189 bytes (!!)
+
+REPEAT-heavy big log:
+- GZIP: 527 bytes
+- CANZ: 613 bytes
+- META repack zstd: 601 bytes
 
 ---
 
-## ✅ Milestone 2 — Canonicalization Layer (DONE - v0)
-### What we added
-- Canonicalize logs BEFORE templating to increase repetition:
-  - timestamps → `<TS>`
-  - UUIDs → `<UUID>`
-  - long hex → `<HEX>`
-  - long ints → `<INT>`
-  - whitespace normalization
+## How USC Works (mental model)
+USC converts text logs into:
+1) **Templates** (the repeating structure)
+2) **Values** (numbers / parameters)
+Then stores:
+- Template order efficiently (MTF + bitpacking)
+- Values efficiently (delta-only)
+- Then zstd compresses the packet
 
-### New best packer
-- **TMTFDO_CAN** (TMTFDO + Canonicalization)
+### USC-LSP v3 (stateful protocol)
+We split the stream into 2 packet types:
+- **DICT packet (warmup)**: templates + arity once
+- **DATA packets (forever)**: only MTF positions + deltas
 
-### Result highlights (`usc bench --toy`)
-VARIED benchmark best custom packer:
-- **TMTFDO_CAN = 1643 bytes**
-MetaPack after upgrade:
-- **METAPACK = 1645 bytes** (auto-selects best method)
-
-⚠️ Note: Canonicalization v0 is **lossy** (placeholders replace original values).
-Next milestone is to make canonicalization **lossless** by storing the stripped values
-in a compact side-stream + dictionary.
+This is the big innovation: compression gets cheaper over time.
 
 ---
 
-## 🎯 Milestone 3 — Bigger leaps (NEXT)
-Goal: stop “micro-wins” and consistently beat gzip/zstd on real agent traces.
+## Roadmap (Start → Finish)
 
-Planned upgrades:
-1) **Lossless canonicalization**
-   - Store stripped UUID/TS/HEX/INT values in a side-stream
-   - Dict + delta-only encoding per type stream
-2) Slot typing per template (ints, enums, small strings)
-3) Persistent dictionaries across runs (streaming)
-4) Random access / partial decode blocks
-5) Optional “utility lossy” modes (agent memory usefulness)
+### Phase 0 — Foundation ✅ (done)
+- [x] Basic template extraction + value encoding
+- [x] MTF ordering
+- [x] Delta-only values
+- [x] Canonicalization experiments
+- [x] zstd integration
+- [x] Bench suite (toy)
+
+### Phase 1 — Streaming Protocol ✅ (done)
+- [x] Stream windows
+- [x] Stream tax reduction (remove per-chunk nvals using template arity)
+- [x] **DICT + DATA split (USC-LSP v3)**
+
+### Phase 2 — Beat GZIP on VARIED (next target)
+Goal: FIRST RUN < gzip (1495) on varied logs
+
+Upgrades:
+- [ ] Shrink DICT packet:
+  - template string tokenization (dict within dict)
+  - normalized whitespace/punctuation
+  - shared fragments across templates
+- [ ] Optional: zstd dictionary training for DICT
+- [ ] Reduce framing bytes (smaller headers, smaller counters)
+
+### Phase 3 — Real Template Mining (high ROI)
+- [ ] Integrate Drain3-style online template mining
+- [ ] Compare against current extractor on varied datasets
+- [ ] Add slot typing: int / float / hex / uuid / timestamp
+
+### Phase 4 — Persistent Dictionaries (true long-lived memory)
+- [ ] Global string dictionary (keys + values)
+- [ ] Per-template slot dictionaries
+- [ ] Cross-window value prediction (more than delta-only)
+
+### Phase 5 — AI Features (USC becomes a product)
+- [ ] Partial decode (query → decode only matching events)
+- [ ] Selective recall (importance weights)
+- [ ] Lossy modes (utility-based gisting)
+- [ ] Index packet (fast search)
+
+### Phase 6 — Packaging + Release
+- [ ] Stable file format versioning
+- [ ] CLI polish (`usc encode`, `usc decode`, `usc stream`)
+- [ ] Public benchmark datasets + charts
+- [ ] First “paper-style” writeup + repo README
 
 ---
 
-## 🚀 Milestone 4 — AI-native memory features (FUTURE)
-- Utility-scored lossy compression modes (keep meaning, drop fluff)
-- Retrieval-friendly memory objects (events/entities/decisions)
-- Streaming codec mode
-- KV-cache memory compression layer (separate module)
+## Success Criteria (what “world class” means)
+USC wins if we can do one of these:
+1) **Lossless**: beat gzip/zstd on real agent traces consistently  
+2) **Practical**: match gzip but add unique value:
+   - partial decode
+   - streaming state
+   - selective recall
+   - memory indexing
+3) **Compression at scale**: steady-state packets stay tiny as agents run for hours/days
 
 ---
 
-## 🧪 Milestone 5 — Real-world benchmarks (FUTURE)
-Add datasets:
-- Tool call logs
-- Multi-agent planner traces
-- JSON structured events
-- Mixed text + JSON hybrid
+## Operator Notes (rules for development)
+- Always keep benchmarks updated.
+- Always write full-file patches (no line edits).
+- Each milestone update:
+  - ROADMAP.md
+  - FILEMAP.md
+  - MASTER_HANDOFF.md
+  - CHANGES.md
 
-Target: match or beat gzip/zstd on real agent datasets, while providing extra USC features gzip cannot.

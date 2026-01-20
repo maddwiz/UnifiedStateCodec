@@ -11,12 +11,15 @@ from usc.mem.stream_proto_canz_v3b import (
     encode_data_packet as data_v3b,
 )
 
+
 def _ratio(raw: int, comp: int) -> float:
     return raw / max(1, comp)
 
+
 def _windows(items, win):
     for i in range(0, len(items), win):
-        yield items[i:i+win]
+        yield items[i:i + win]
+
 
 def run(loops: int = 350):
     raw_big = real_agent_trace(loops=loops, seed=7)
@@ -47,6 +50,7 @@ def run(loops: int = 350):
 
             total = len(pkt_dict)
             sizes = []
+
             for w in _windows(chunks, win):
                 pkt = data_v3b(w, st_send, level=10)
                 sizes.append(len(pkt))
@@ -54,16 +58,21 @@ def run(loops: int = 350):
 
             ratio = _ratio(len(raw_bytes), total)
 
-            row = (ratio, total, max_lines, win, len(pkt_dict), sum(sizes)/len(sizes))
+            row = (ratio, total, max_lines, win, len(pkt_dict), sum(sizes) / len(sizes))
             if best is None or row[0] > best[0]:
                 best = row
 
-            print(f"lines={max_lines:>2} win={win:>2} | TOTAL={total:>6} | ratio={ratio:>5.2f}x | dict={len(pkt_dict):>5} | data_avg={sum(sizes)/len(sizes):>7.1f}")
+            print(
+                f"lines={max_lines:>2} win={win:>2} | "
+                f"TOTAL={total:>6} | ratio={ratio:>5.2f}x | "
+                f"dict={len(pkt_dict):>5} | data_avg={sum(sizes)/len(sizes):>7.1f}"
+            )
 
     print("-------------------------------------------------")
     br, bt, bl, bw, bd, bavg = best
     print(f"✅ BEST: lines={bl} win={bw} | TOTAL={bt} | ratio={br:.2f}x | dict={bd} | data_avg={bavg:.1f}")
     print("-------------------------------------------------")
+
 
 if __name__ == "__main__":
     run()

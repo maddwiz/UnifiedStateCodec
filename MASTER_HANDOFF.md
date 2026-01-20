@@ -7,81 +7,70 @@ If you open a new chat window: start here.
 ## Project Goal
 Create an AI-native compression protocol that:
 - matches or beats gzip/zstd on real agent traces
-- becomes dramatically better over time (stateful streaming)
+- becomes better over time (stateful streaming)
 - supports partial recall + future memory features
 
 ---
 
-## What Works Right Now (✅ Verified)
-### Best batch codec
-- **TMTFDO_CANZ** (canonical + zstd) is best known batch.
-- Best chunking found by sweep = **25 lines per chunk**
+## ✅ Current Champion: USC-LSP v3b (lossless + beats gzip)
+USC-LSP v3b is the best known version:
+- lossless roundtrip verified ✅
+- beats gzip on VARIED toy log on FIRST RUN ✅
 
-### Major breakthrough: USC-LSP v3
-We split streaming into 2 packet types:
-- **DICT packet** (warmup once)
-- **DATA packets** (forever)
-
-Results on VARIED big log (toy):
-- RAW: 13,587 bytes
-- GZIP: 1,495 bytes
-- CANZ batch @25: 1,545 bytes
-- **DICT+DATA FIRST RUN: 1,537 bytes**
-- **DICT+DATA STEADY: 189 bytes**
-
-This is the novelty territory: long-lived compression.
+### Bench7 (VARIED big log)
+- RAW: 13587
+- GZIP: 1495
+- v3 FIRST: 1537
+- ✅ v3b FIRST: 1420 (beats gzip by 75 bytes)
 
 ---
 
-## How to Run Benchmarks (copy/paste)
-### Compile check
+## How USC Works
+USC turns text logs into:
+1) Templates (structure)
+2) Values (parameters)
+Then stores:
+- template ordering efficiently (MTF + bitpacking)
+- values efficiently (delta-only)
+- zstd compresses packets
+
+### USC-LSP Protocol
+Two packet types:
+- **DICT packet**: templates once
+- **DATA packets**: only MTF positions + deltas
+
+v3b improves DICT by removing redundant fields:
+- tid implied by position
+- arity inferred on receiver
+And ensures losslessness:
+- ints-only slot extraction (prevents ASCII letter → int bug)
+
+---
+
+## How to Run (copy/paste)
+### Main bench
 ```bash
-python -m py_compile src/usc/bench/runner.py
-python -m pytest -q
--Main bench
 usc bench --toy
--Chunk sweep
-python -m usc.bench.sweep
--Streaming DICT+DATA bench
-python -m usc.bench.stream_bench5
-
-Current Best Settings
-	•	VARIED bench: 25 lines per chunk
-	•	Goal: beat gzip on FIRST RUN (currently only 42 bytes behind)
+-Streaming DICT+DATA comparison
+python -m usc.bench.stream_bench7
+-Lossless proof
+python -m usc.bench.stream_roundtrip_test_v3b
+Expected output:
+	•	ROUNDTRIP OK: True
 
 ⸻
 
-Biggest Next Upgrades (Do these next)
-
-1) Shrink DICT packet size (highest ROI)
-
-Goal: FIRST RUN < gzip (1495 bytes)
-
-Ideas:
-	•	tokenize templates inside DICT (dictionary-of-template-tokens)
-	•	normalize whitespace/punctuation
-	•	share common fragments across templates
-	•	possibly zstd dict training for DICT
-
-2) Better template mining (Drain3)
-
-Replace toy template extraction with Drain3-style log parsing for real traces.
-
-3) Persistent dictionaries
-
-Global string dict + per-slot value dict + type-aware encoding (uuid/time/hex).
+Best Settings
+	•	Chunking: 25 lines per chunk
+	•	Goal: continue improving VARIED, then move to real-world logs
 
 ⸻
 
-What To Never Forget
-	•	Chunking has a sweet spot (10 too small, 25 best, larger gets worse due to template explosion)
-	•	Streaming must use windows (micro-packets kill ratio)
-	•	USC’s main power is: state persists, gzip can’t do that.
-
-⸻
-
-Milestones
-	•	✅ USC-LSP v3 created: DICT+DATA protocol
-	•	✅ CANZ + best chunk size discovered (25)
-	•	✅ Bench suite built + reproducible results
+Next Upgrades (highest ROI)
+	1.	Typed slots (lossless):
+	•	int / float / hex / uuid / timestamp / small strings
+	2.	Drain3 template mining
+	•	better templates on real logs (massive real-world win)
+	3.	Persistent global dictionaries
+	•	shared keys/values across long sessions
 

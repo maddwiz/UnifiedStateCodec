@@ -224,7 +224,7 @@ def encode_data_packet(chunks: List[str], state: StreamStateV3B, level: int = 10
 
         if not state.seen_tid.get(tid, False):
             for v in vals:
-                out += encode_uvarint(v)
+                out += encode_uvarint(_zigzag_encode(v))
             state.seen_tid[tid] = True
             state.prev_vals_by_tid[tid] = list(vals)
         else:

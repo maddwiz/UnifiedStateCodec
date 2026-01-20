@@ -6,7 +6,7 @@ from typing import List, Tuple
 import zstandard as zstd
 
 
-MAGIC = b"USC_OUT1"
+MAGIC = b"USC_OUT1"  # exactly 8 bytes
 
 
 @dataclass
@@ -54,11 +54,9 @@ def compress_outerstream(packets: List[bytes], level: int = 10) -> Tuple[bytes, 
     """
     Bytes:
       [MAGIC 8B][level u32][raw_len u32][comp_len u32][zstd_bytes...]
-
-    NOTE:
-      MAGIC length is 8 bytes (b"USC_OUT1")
     """
     raw = pack_packets(packets)
+
     cctx = zstd.ZstdCompressor(level=level)
     comp = cctx.compress(raw)
 

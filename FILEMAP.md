@@ -1,67 +1,36 @@
-# USC — Repo File Map
+# FILEMAP — Unified State Codec (USC)
 
-This file explains where everything lives.
+## Core Modules
 
----
+### Packetization (USC v3b)
+- `src/usc/mem/stream_proto_canz_v3b.py`
+  - Builds dict packet + data packets
+  - Encodes structured stream
 
-## Root
-- `ROADMAP.md` — project plan + phases
-- `FILEMAP.md` — this map
-- `MASTER_HANDOFF.md` — handoff summary (what works, how to run)
-- `CHANGES.md` — milestone log + what changed each time
+### ZSTD Dictionary Support
+- `src/usc/mem/zstd_trained_dict.py`
+  - Safe dictionary training with conservative sizing
+  - Plain zstd helpers
 
----
+### Outer Stream Wrapper
+- `src/usc/mem/outerstream_zstd.py`
+  - Frames packets into one byte stream
+  - Compress/decompress outer layer (plain zstd)
 
-## Core Code
-### `src/usc/mem/`
-Compression modules (the heart of USC)
-
-Key files:
-- `templatepack.py`
-  - `_extract_template(...)` template + values extractor used across codecs
-- `templatemtf_bits_deltaonly_canon.py`
-  - "CAN" codec (canonicalized)
-- `templatemtf_bits_deltaonly_canon_zstd.py`
-  - "CANZ" codec (CAN + zstd backend) ✅ best batch codec
-- `zstd_codec.py`
-  - zstd compress/decompress helper
-- `stream_window_canz.py`
-  - stream-window prototype (v1)
-- `stream_window_canz_v2.py`
-  - stream-window with arity stored once (removes nvals) ✅ improved stream window
-- `stream_proto_canz_v3.py`
-  - ✅ DICT + DATA protocol (USC-LSP v3) **major breakthrough**
-- `canonicalize_lossless.py`
-  - lossless canonicalization experiments
-- `canonicalize_typed_lossless.py`
-  - typed canonicalization experiments
-
----
+### ODC (Outer Dictionary Codec)
+- `src/usc/api/codec_odc.py`
+  - ODC encode/decode API
+  - Text -> packets -> ODC blob
+  - Blob -> packets
 
 ## Benchmarks
-### `src/usc/bench/`
-Benchmark scripts used to test progress
+- `src/usc/bench/stream_bench19_outerstream.py`
+  - USC packets + outer zstd pass
+- `src/usc/bench/stream_bench20_outerstream_dict.py`
+  - OuterStream framed + trained dict zstd
+- `src/usc/bench/stream_bench21_odc_roundtrip.py`
+  - ODC encode/decode roundtrip test
 
-Key files:
-- `runner.py`
-  - main CLI bench logic (`usc bench --toy`) ✅ default chunking set to 25
-- `sweep.py`
-  - chunk size sweep test (10 / 25 / 50 / 100 / 200)
-- `stream_bench.py` / `stream_bench2.py` / `stream_bench3.py` / `stream_bench4.py`
-  - streaming experiments and progression
-- `stream_bench5.py`
-  - ✅ DICT+DATA protocol benchmark (FIRST RUN vs STEADY)
-
----
-
-## CLI (entry points)
-Depends on current repo structure. The bench command used:
-- `usc bench --toy`
-
----
-
-## Naming
-- `CAN`  = canonicalized batch encoding
-- `CANZ` = CAN + zstd backend
-- `USC-LSP v3` = DICT+DATA streaming protocol
-
+## Datasets
+- `src/usc/bench/datasets_real_agent_trace.py`
+  - Synthetic “real-ish” agent trace generator

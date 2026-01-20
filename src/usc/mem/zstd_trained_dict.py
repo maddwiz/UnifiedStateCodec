@@ -21,35 +21,28 @@ def _clean_samples(samples: List[bytes]) -> List[bytes]:
     return out
 
 
-def _split_bytes(blob: bytes, chunk_size: int = 512) -> List[bytes]:
-    if not blob:
-        return []
-    return [blob[i:i + chunk_size] for i in range(0, len(blob), chunk_size)]
-
-
 def _candidate_sizes(target: int, total_src: int) -> List[int]:
     """
-    Conservative dict sizing for small corpora.
-
-    zstd dict training can fail if dict is too big relative to total src.
-    We'll try a descending list of safe sizes.
+    More conservative than before.
+    Many zstd builds are picky when total_src is small-ish.
+    Rule: dict <= 1/32 of total source, then halve down to 256.
     """
     if total_src <= 0:
         return []
 
-    # keep dict <= 1/8 of source, and <= target
-    cap = max(256, min(target, total_src // 8))
+    cap = max(256, min(target, total_src // 32))
+    if cap < 256:
+        return []
 
-    # also try smaller ones if needed
     sizes = []
     s = cap
     while s >= 256:
         sizes.append(s)
         s //= 2
 
-    # always ensure uniqueness
-    uniq = []
+    # unique, descending
     seen = set()
+    uniq = []
     for x in sizes:
         if x not in seen:
             uniq.append(x)
@@ -58,12 +51,6 @@ def _candidate_sizes(target: int, total_src: int) -> List[int]:
 
 
 def train_dict(samples: List[bytes], dict_size: int = 8192) -> ZstdDictBundle:
-    """
-    Safe dictionary trainer:
-      - Cleans samples
-      - Tries multiple dict sizes
-      - If training fails at all sizes -> raises RuntimeError
-    """
     samples = _clean_samples(samples)
     if not samples:
         raise ValueError("train_dict: samples is empty")
@@ -71,7 +58,7 @@ def train_dict(samples: List[bytes], dict_size: int = 8192) -> ZstdDictBundle:
     total_src = sum(len(s) for s in samples)
     sizes = _candidate_sizes(dict_size, total_src)
     if not sizes:
-        raise RuntimeError("train_dict: not enough source bytes")
+        raise RuntimeError("train_dict: not enough source bytes for dict training")
 
     last_err: Optional[Exception] = None
     for size in sizes:

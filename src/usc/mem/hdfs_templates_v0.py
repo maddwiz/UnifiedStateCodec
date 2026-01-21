@@ -102,6 +102,8 @@ def parse_hdfs_lines(
     Returns:
       events: [(event_id_int, params)]
       unknown_lines: [raw_line]
+
+    NOTE: This loses row ordering. (Good for cold/stream.)
     """
     events: List[Tuple[int, List[str]]] = []
     unknown_lines: List[str] = []
@@ -126,3 +128,42 @@ def parse_hdfs_lines(
             unknown_lines.append(s)
 
     return events, unknown_lines
+
+
+def parse_hdfs_lines_rows(
+    lines: List[str],
+    bank: HDFSTemplateBank,
+) -> Tuple[List[Tuple[int, List[str]] | None], List[str]]:
+    """
+    ✅ Row-preserving parser for H1M2 (hot/hot-lite lossless).
+
+    Returns:
+      rows: list same length as `lines`
+            rows[i] = (event_id_int, params) if template match
+            rows[i] = None if unknown/raw row
+      unknown_lines: raw strings in the same order as the None rows appear
+
+    This is what we need to make query modes truly lossless across mixed logs.
+    """
+    rows: List[Tuple[int, List[str]] | None] = []
+    unknown_lines: List[str] = []
+
+    for ln in lines:
+        s = ln.rstrip("\n")
+        matched = False
+
+        for eid, rx, _wc, _tpl, anchor in bank.compiled:
+            if anchor and anchor not in s:
+                continue
+            m = rx.match(s)
+            if m:
+                params = list(m.groups()) if m.groups() else []
+                rows.append((eid, params))
+                matched = True
+                break
+
+        if not matched:
+            rows.append(None)
+            unknown_lines.append(s)
+
+    return rows, unknown_lines

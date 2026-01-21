@@ -14,11 +14,12 @@ except Exception:
 from usc.mem.hdfs_templates_v0 import HDFSTemplateBank, parse_hdfs_lines
 from usc.mem.tpl_pf1_recall_v1 import build_tpl_pf1_blob as build_pf1
 from usc.mem.tpl_pfq1_query_v1 import build_pfq1_blob as build_pfq1
+from usc.mem.tpl_fast_query_v1 import query_fast_pf1
 from usc.mem.tpl_query_router_v1 import query_router_v1
 from usc.api.hdfs_template_codec_v1m_bundle import bundle_encode_and_compress_v1m
 
 
-MAGIC_HOT = b"USCH"   # PF1 + PFQ1 container
+MAGIC_HOT = b"USCH"   # PF1 + optional PFQ1 container
 MAGIC_COLD = b"USCC"  # TPLv1M bundle container
 VERSION = 1
 
@@ -68,7 +69,7 @@ def hot_pack(pf1_blob: bytes, pfq1_blob: bytes) -> bytes:
       pf1_len (u32)
       pfq1_len (u32)
       pf1_blob
-      pfq1_blob
+      pfq1_blob (optional; may be empty)
     """
     return (
         MAGIC_HOT
@@ -96,7 +97,7 @@ def hot_unpack(blob: bytes) -> Tuple[bytes, bytes]:
 
     pf1 = blob[off:off + pf1_len]
     off += pf1_len
-    pfq1 = blob[off:off + pfq1_len]
+    pfq1 = blob[off:off + pfq1_len] if pfq1_len > 0 else b""
     return pf1, pfq1
 
 
@@ -204,6 +205,25 @@ def cmd_encode(args: argparse.Namespace) -> None:
         print(f"USCH:    {_pretty(len(hot_blob))}   saved ✅")
         print(f"ratio:   {_ratio(len(raw_bytes), len(hot_blob)):.2f}x")
 
+    elif mode == "hot-lite":
+        # PF1 only (fast build, smaller hot file, no PFQ1 fallback)
+        t0 = time.perf_counter()
+        pf1_blob, _pf1_meta = build_pf1(
+            events, unknown, tpl_text,
+            packet_events=args.packet_events,
+            zstd_level=args.zstd,
+        )
+        dt_pf1 = (time.perf_counter() - t0) * 1000.0
+
+        hot_blob = hot_pack(pf1_blob, b"")
+        with open(out_path, "wb") as f:
+            f.write(hot_blob)
+
+        print(f"RAW:     {_pretty(len(raw_bytes))}")
+        print(f"PF1:     {_pretty(len(pf1_blob))}   build={dt_pf1:.2f} ms")
+        print(f"USCH:    {_pretty(len(hot_blob))}   saved ✅ (HOT-LITE)")
+        print(f"ratio:   {_ratio(len(raw_bytes), len(hot_blob)):.2f}x")
+
     elif mode == "cold":
         t0 = time.perf_counter()
         bundle_blob, _meta = bundle_encode_and_compress_v1m(
@@ -224,7 +244,7 @@ def cmd_encode(args: argparse.Namespace) -> None:
         print(f"ratio:   {_ratio(len(raw_bytes), len(cold_blob)):.2f}x")
 
     else:
-        raise SystemExit("❌ mode must be: hot | cold")
+        raise SystemExit("❌ mode must be: hot | hot-lite | cold")
 
     print("-" * 60)
     print("DONE ✅")
@@ -248,6 +268,27 @@ def cmd_query(args: argparse.Namespace) -> None:
     print("-" * 60)
 
     t0 = time.perf_counter()
+
+    # HOT-LITE: PFQ1 missing → FAST-only
+    if len(pfq1_blob) == 0:
+        hits, cands = query_fast_pf1(pf1_blob, q, limit=limit)
+        dt = (time.perf_counter() - t0) * 1000.0
+
+        print("mode: FAST (HOT-LITE)")
+        print(f"hits: {len(hits)}   time={dt:.2f} ms")
+        if not hits:
+            print("-" * 60)
+            print("No hits found in FAST-only mode.")
+            print("Tip: encode with --mode hot (includes PFQ1 fallback) for universal keyword search.")
+        elif hits:
+            print("-" * 60)
+            for i, h in enumerate(hits[: min(limit, 10)]):
+                print(f"{i+1:02d}) {h[:200]}")
+        print("-" * 60)
+        print("DONE ✅")
+        return
+
+    # Full HOT: router FAST → PFQ1 fallback
     hits, mode = query_router_v1(pf1_blob, pfq1_blob, q, limit=limit)
     dt = (time.perf_counter() - t0) * 1000.0
 
@@ -272,9 +313,6 @@ def _row(name: str, size: int, raw: int, ms: float) -> Dict[str, object]:
 
 
 def cmd_bench(args: argparse.Namespace) -> None:
-    """
-    One command, one scoreboard.
-    """
     log_path = args.log
     tpl_path = args.tpl
     lines = args.lines
@@ -317,17 +355,24 @@ def cmd_bench(args: argparse.Namespace) -> None:
     else:
         rows.append({"name": f"zstd-{args.zstd}", "bytes": None, "pretty": "N/A", "ratio": None, "ms": None})
 
-    # --- USC HOT (USCH)
+    # --- USC HOT-LITE (PF1 only)
     t0 = time.perf_counter()
     pf1_blob, _m1 = build_pf1(events, unknown, tpl_text, packet_events=args.packet_events, zstd_level=args.zstd)
     t_pf1 = (time.perf_counter() - t0) * 1000.0
+    usch_lite = hot_pack(pf1_blob, b"")
+    rows.append(_row("USC-HOT-LITE (PF1)", len(usch_lite), raw_n, t_pf1))
+
+    # --- USC HOT (PF1 + PFQ1)
+    t0 = time.perf_counter()
+    pf1_blob2, _m2 = build_pf1(events, unknown, tpl_text, packet_events=args.packet_events, zstd_level=args.zstd)
+    t_pf1b = (time.perf_counter() - t0) * 1000.0
 
     t0 = time.perf_counter()
-    pfq1_blob, _m2 = build_pfq1(events, unknown, tpl_text, packet_events=args.packet_events, zstd_level=args.zstd)
+    pfq1_blob, _m3 = build_pfq1(events, unknown, tpl_text, packet_events=args.packet_events, zstd_level=args.zstd)
     t_pfq1 = (time.perf_counter() - t0) * 1000.0
 
-    usch = hot_pack(pf1_blob, pfq1_blob)
-    rows.append(_row("USC-HOT (USCH)", len(usch), raw_n, t_pf1 + t_pfq1))
+    usch = hot_pack(pf1_blob2, pfq1_blob)
+    rows.append(_row("USC-HOT (USCH)", len(usch), raw_n, t_pf1b + t_pfq1))
 
     # --- USC COLD (USCC)
     t0 = time.perf_counter()
@@ -342,8 +387,7 @@ def cmd_bench(args: argparse.Namespace) -> None:
     uscc = cold_pack(bundle_blob)
     rows.append(_row("USC-COLD (USCC)", len(uscc), raw_n, t_cold))
 
-    # print table
-    rows_sorted = sorted([r for r in rows if r.get("bytes") is not None], key=lambda x: x["bytes"])  # smallest first
+    rows_sorted = sorted([r for r in rows if r.get("bytes") is not None], key=lambda x: x["bytes"])
 
     print(f"{'METHOD':24} {'SIZE':12} {'RATIO':10} {'BUILD(ms)':10}")
     print("-" * 72)
@@ -352,8 +396,9 @@ def cmd_bench(args: argparse.Namespace) -> None:
 
     print("-" * 72)
     print("NOTES:")
-    print(" - USC-HOT stores PF1 + PFQ1 (queryable + fallback).")
-    print(" - USC-COLD stores max-compression bundle archive.")
+    print(" - HOT-LITE stores PF1 only (FAST queries, no PFQ1 fallback).")
+    print(" - HOT stores PF1 + PFQ1 (FAST + universal fallback).")
+    print(" - COLD stores max-compression bundle archive.")
     print(" - gzip/zstd are general compressors (not queryable).")
     print("-" * 72)
 
@@ -381,8 +426,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sub = p.add_subparsers(dest="cmd", required=True)
 
-    enc = sub.add_parser("encode", help="Encode a log into HOT (queryable) or COLD (max ratio) USC blob")
-    enc.add_argument("--mode", choices=["hot", "cold"], required=True)
+    enc = sub.add_parser("encode", help="Encode a log into HOT/HOT-LITE (queryable) or COLD (max ratio)")
+    enc.add_argument("--mode", choices=["hot", "hot-lite", "cold"], required=True)
     enc.add_argument("--log", default="data/loghub/HDFS.log")
     enc.add_argument("--tpl", default="data/loghub/preprocessed/HDFS.log_templates.csv")
     enc.add_argument("--out", required=True)
@@ -391,7 +436,7 @@ def build_parser() -> argparse.ArgumentParser:
     enc.add_argument("--zstd", type=int, default=10)
     enc.set_defaults(func=cmd_encode)
 
-    qry = sub.add_parser("query", help="Query a HOT USC blob (FAST → PFQ1 fallback)")
+    qry = sub.add_parser("query", help="Query a HOT/HOT-LITE USC blob")
     qry.add_argument("--hot", required=True)
     qry.add_argument("--q", required=True)
     qry.add_argument("--limit", type=int, default=25)
@@ -404,7 +449,7 @@ def build_parser() -> argparse.ArgumentParser:
     b.add_argument("--packet_events", type=int, default=32768)
     b.add_argument("--gzip", type=int, default=9)
     b.add_argument("--zstd", type=int, default=10)
-    b.add_argument("--out_json", default=None, help="Optional: save scoreboard to JSON file")
+    b.add_argument("--out_json", default=None)
     b.set_defaults(func=cmd_bench)
 
     return p

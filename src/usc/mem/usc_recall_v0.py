@@ -189,6 +189,63 @@ def _match_plain_keywords(kws_plain: Set[str], line: str, prefix_len: int) -> bo
     return True
 
 
+def recall_from_packets_decoded(
+    packets_part: List[bytes],
+    keywords: Set[str],
+    require_all: bool = True,
+    prefix_len: int = 5,
+    selected_packets: int = 0,
+    selected_blocks: int = 0,
+    total_blocks: int = 0,
+) -> RecallResult:
+    """
+    Recall directly from *already decoded* packet bytes list.
+    packets_part must include dict packet at index 0.
+    """
+    kws = _normalize_keywords(keywords)
+    if not kws or not packets_part:
+        return RecallResult(matched_lines=[], selected_packets=0, selected_blocks=0, total_blocks=0)
+
+    if not packets_part[0].startswith(MAGIC_SASD):
+        raise ValueError("recall_from_packets_decoded: missing dict packet")
+
+    lines = decode_sas_packets_to_lines(packets_part)
+
+    kws_struct = {k for k in kws if k.startswith(("tool:", "k:", "v:", "kv:", "n:"))}
+    kws_plain = {k for k in kws if k not in kws_struct}
+
+    out: List[str] = []
+    for ln in lines:
+        tool = _try_parse_tool_from_line(ln)
+        payload = _try_parse_payload_from_line(ln)
+
+        if require_all:
+            if kws_struct and not _match_structured_tokens(kws_struct, tool, payload):
+                continue
+            if kws_plain and not _match_plain_keywords(kws_plain, ln, prefix_len=prefix_len):
+                continue
+            out.append(ln)
+        else:
+            ok = False
+            if kws_struct and _match_structured_tokens(kws_struct, tool, payload):
+                ok = True
+            if not ok and kws_plain:
+                for kw in kws_plain:
+                    terms = _keyword_match_terms(kw, prefix_len=prefix_len)
+                    if any(t in ln.lower() for t in terms):
+                        ok = True
+                        break
+            if ok:
+                out.append(ln)
+
+    return RecallResult(
+        matched_lines=out,
+        selected_packets=int(selected_packets),
+        selected_blocks=int(selected_blocks),
+        total_blocks=int(total_blocks),
+    )
+
+
 def recall_from_odc2s(
     blob: bytes,
     packets_all: List[bytes],
@@ -198,6 +255,12 @@ def recall_from_odc2s(
     require_all: bool = True,
     prefix_len: int = 5,
 ) -> RecallResult:
+    """
+    Normal recall path:
+      - bloom packet prefilter
+      - decode selected blocks
+      - filter via decoded lines
+    """
     kws = _normalize_keywords(keywords)
     if not kws or not packets_all:
         return RecallResult(matched_lines=[], selected_packets=0, selected_blocks=0, total_blocks=0)
@@ -238,41 +301,11 @@ def recall_from_odc2s(
         if not packets_part[0].startswith(MAGIC_SASD):
             packets_part = [packets_all[0]] + packets_part
 
-    if not packets_part[0].startswith(MAGIC_SASD):
-        raise ValueError("recall: missing SAS dict packet")
-
-    # Decode selected packets to text lines
-    lines = decode_sas_packets_to_lines(packets_part)
-
-    kws_struct = {k for k in kws if k.startswith(("tool:", "k:", "v:", "kv:", "n:"))}
-    kws_plain = {k for k in kws if k not in kws_struct}
-
-    out: List[str] = []
-    for ln in lines:
-        tool = _try_parse_tool_from_line(ln)
-        payload = _try_parse_payload_from_line(ln)
-
-        if require_all:
-            if kws_struct and not _match_structured_tokens(kws_struct, tool, payload):
-                continue
-            if kws_plain and not _match_plain_keywords(kws_plain, ln, prefix_len=prefix_len):
-                continue
-            out.append(ln)
-        else:
-            ok = False
-            if kws_struct and _match_structured_tokens(kws_struct, tool, payload):
-                ok = True
-            if not ok and kws_plain:
-                for kw in kws_plain:
-                    terms = _keyword_match_terms(kw, prefix_len=prefix_len)
-                    if any(t in ln.lower() for t in terms):
-                        ok = True
-                        break
-            if ok:
-                out.append(ln)
-
-    return RecallResult(
-        matched_lines=out,
+    return recall_from_packets_decoded(
+        packets_part=packets_part,
+        keywords=keywords,
+        require_all=require_all,
+        prefix_len=prefix_len,
         selected_packets=len(want_packet_indices),
         selected_blocks=len(block_ids),
         total_blocks=meta.block_count,

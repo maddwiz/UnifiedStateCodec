@@ -741,3 +741,94 @@ def _encode_int_nonempty(values):
         out += _svarint_encode(x - prev)
         prev = x
     return bytes(out)
+
+
+# ============================================================
+# FINAL OVERRIDE: STRONG TYPING (INT + IP + HEX + DICT + RAW)
+# This is the missing half of the typed restore.
+# ============================================================
+
+import re as _re_typing_final
+
+_INT_RE_F = _re_typing_final.compile(r"^-?\d+$")
+_HEX_RE_F = _re_typing_final.compile(r"^(0x)?[0-9a-fA-F]{6,}$")
+_IP_RE_F  = _re_typing_final.compile(r"^\d{1,3}(\.\d{1,3}){3}$")
+
+
+def _all_int_F(vals: list[str]) -> bool:
+    if not vals:
+        return False
+    for v in vals:
+        if not _INT_RE_F.match((v or "").strip()):
+            return False
+    return True
+
+
+def _all_hex_F(vals: list[str]) -> bool:
+    if not vals:
+        return False
+    for v in vals:
+        if not _HEX_RE_F.match((v or "").strip()):
+            return False
+    return True
+
+
+def _all_ip_F(vals: list[str]) -> bool:
+    if not vals:
+        return False
+    for v in vals:
+        s = (v or "").strip()
+        if not _IP_RE_F.match(s):
+            return False
+        parts = s.split(".")
+        try:
+            if not all(0 <= int(p) <= 255 for p in parts):
+                return False
+        except Exception:
+            return False
+    return True
+
+
+# type tags expected by _encode_by_type:
+# 0 raw, 1 int, 2 hex, 3 ip, 4 dict
+def _choose_type(values_nonempty: list[str], dict_threshold: int = 12) -> int:
+    if not values_nonempty:
+        return 0  # RAW
+
+    # ✅ strongest / smallest encodings first
+    if _all_int_F(values_nonempty):
+        return 1  # INT
+    if _all_ip_F(values_nonempty):
+        return 3  # IP
+    if _all_hex_F(values_nonempty):
+        return 2  # HEX
+
+    # ✅ DICT when repetition is heavy
+    uniq = len(set(values_nonempty))
+    if (len(values_nonempty) - uniq) >= dict_threshold:
+        return 4  # DICT
+
+    return 0  # RAW
+
+
+def _encode_int_nonempty(values: list[str]) -> bytes:
+    """
+    Safe INT encoder:
+    If anything isn't an int, fall back to RAW encoding.
+    """
+    if not _all_int_F(values):
+        return _encode_raw_nonempty(values)
+
+    ints = [int(v.strip()) for v in values]
+    out = bytearray()
+    out += _uvarint_encode(len(ints))
+    if not ints:
+        return bytes(out)
+
+    out += _svarint_encode(ints[0])
+    prev = ints[0]
+    for x in ints[1:]:
+        out += _svarint_encode(x - prev)
+        prev = x
+    return bytes(out)
+

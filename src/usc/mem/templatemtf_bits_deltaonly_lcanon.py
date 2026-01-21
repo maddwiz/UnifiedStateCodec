@@ -6,7 +6,7 @@ from usc.mem.templatepack import _extract_template
 from usc.mem.canonicalize_lossless import canonicalize_lossless, reinflate_placeholders
 
 
-MAGIC = b"USCLCN1"  # Lossless Canonicalized TMTFDO v0.1
+MAGIC = b"USCLCN2"  # Lossless Canonicalized TMTFDO v0.2 (stores per-template arity; no per-chunk nvals)
 
 
 def _pack_string(s: str) -> bytes:
@@ -99,11 +99,14 @@ def _zigzag_decode(z: int) -> int:
 
 def encode_chunks_with_template_mtf_bits_deltaonly_lcanon(chunks: List[str]) -> bytes:
     """
-    TMTFDO_LCAN (lossless):
+    TMTFDO_LCAN v0.2 (lossless):
     - Canonicalize losslessly -> placeholders + tokens side-stream
     - Template + MTF + bitpack positions
     - Delta-only values per template stream
     - Store token side-stream so decode restores exact original text
+
+    v0.2 change:
+    - Store per-template arity ONCE -> remove per-chunk `nvals`
     """
     templates: List[str] = []
     temp_index: Dict[str, int] = {}
@@ -129,6 +132,22 @@ def encode_chunks_with_template_mtf_bits_deltaonly_lcanon(chunks: List[str]) -> 
         tids.append(tid)
         values_per_chunk.append(vals)
 
+    # Compute per-template arity once
+    arity_by_tid: Dict[int, int] = {}
+    for tid, vals in zip(tids, values_per_chunk):
+        a = len(vals)
+        if tid not in arity_by_tid:
+            arity_by_tid[tid] = a
+        else:
+            if arity_by_tid[tid] != a:
+                raise ValueError(
+                    f"Template arity changed for tid={tid}: expected {arity_by_tid[tid]}, got {a}"
+                )
+
+    arities: List[int] = [0] * len(templates)
+    for tid in range(len(templates)):
+        arities[tid] = arity_by_tid.get(tid, 0)
+
     # Template IDs: MTF + bitpack
     positions = _mtf_encode(tids, alphabet_size=len(templates))
     max_pos = max(positions) if positions else 0
@@ -143,6 +162,11 @@ def encode_chunks_with_template_mtf_bits_deltaonly_lcanon(chunks: List[str]) -> 
     for t in templates:
         out += _pack_string(t)
 
+    # Store per-template arity list
+    out += encode_uvarint(len(arities))
+    for a in arities:
+        out += encode_uvarint(a)
+
     # Store chunk count
     out += encode_uvarint(len(chunks))
 
@@ -151,12 +175,14 @@ def encode_chunks_with_template_mtf_bits_deltaonly_lcanon(chunks: List[str]) -> 
     out += encode_uvarint(len(packed_positions))
     out += packed_positions
 
-    # Store values with delta-only per template
+    # Store values with delta-only per template (no per-chunk nvals)
     seen_tid: Dict[int, bool] = {}
     prev_vals_by_tid: Dict[int, List[int]] = {}
 
     for tid, vals in zip(tids, values_per_chunk):
-        out += encode_uvarint(len(vals))
+        nvals = arities[tid]
+        if nvals != len(vals):
+            raise ValueError(f"Arity mismatch for tid={tid}: arity={nvals}, len(vals)={len(vals)}")
 
         if not seen_tid.get(tid, False):
             for v in vals:
@@ -164,7 +190,7 @@ def encode_chunks_with_template_mtf_bits_deltaonly_lcanon(chunks: List[str]) -> 
             seen_tid[tid] = True
             prev_vals_by_tid[tid] = list(vals)
         else:
-            prev = prev_vals_by_tid.get(tid, [0] * len(vals))
+            prev = prev_vals_by_tid.get(tid, [0] * nvals)
             new_prev: List[int] = []
             for i, v in enumerate(vals):
                 pv = prev[i] if i < len(prev) else 0
@@ -174,9 +200,6 @@ def encode_chunks_with_template_mtf_bits_deltaonly_lcanon(chunks: List[str]) -> 
             prev_vals_by_tid[tid] = new_prev
 
     # Store side-stream tokens (lossless reinflation)
-    # For each chunk:
-    #   token_count
-    #   each token as length+bytes
     for toks in tokens_per_chunk:
         out += encode_uvarint(len(toks))
         for t in toks:
@@ -188,7 +211,7 @@ def encode_chunks_with_template_mtf_bits_deltaonly_lcanon(chunks: List[str]) -> 
 def decode_chunks_with_template_mtf_bits_deltaonly_lcanon(packet_bytes: bytes) -> List[str]:
     raw = gzip.decompress(packet_bytes)
     if not raw.startswith(MAGIC):
-        raise ValueError("Not a TMTFDO_LCAN packet")
+        raise ValueError("Not a TMTFDO_LCAN v0.2 packet")
 
     off = len(MAGIC)
 
@@ -197,6 +220,16 @@ def decode_chunks_with_template_mtf_bits_deltaonly_lcanon(packet_bytes: bytes) -
     for _ in range(ntemps):
         s, off = _unpack_string(raw, off)
         templates.append(s)
+
+    # Read per-template arity list
+    narities, off = decode_uvarint(raw, off)
+    arities: List[int] = []
+    for _ in range(narities):
+        a, off = decode_uvarint(raw, off)
+        arities.append(a)
+
+    if narities != len(templates):
+        raise ValueError("Arity list length mismatch vs templates")
 
     nchunks, off = decode_uvarint(raw, off)
 
@@ -208,14 +241,14 @@ def decode_chunks_with_template_mtf_bits_deltaonly_lcanon(packet_bytes: bytes) -
     positions = _bitunpack(packed_positions, nchunks, pos_bits)
     tids = _mtf_decode(positions, alphabet_size=len(templates))
 
-    # Decode values
+    # Decode values (no per-chunk nvals)
     seen_tid: Dict[int, bool] = {}
     prev_vals_by_tid: Dict[int, List[int]] = {}
 
     canon_out: List[str] = []
 
     for tid in tids:
-        nvals, off = decode_uvarint(raw, off)
+        nvals = arities[tid]
         vals: List[int] = []
 
         if not seen_tid.get(tid, False):

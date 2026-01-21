@@ -1,0 +1,2 @@
+name,log,tpl
+HDFS,data/loghub/HDFS.log,data/loghub/preprocessed/HDFS.log_templates.csv

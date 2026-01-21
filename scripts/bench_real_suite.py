@@ -9,9 +9,8 @@ import time
 from dataclasses import dataclass, asdict
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[1]
-MANIFEST = ROOT / "data" / "real_datasets" / "manifest.csv"
+MANIFEST = ROOT / "configs" / "real_datasets_manifest.csv"
 OUTDIR = ROOT / "results"
 OUTDIR.mkdir(exist_ok=True)
 
@@ -86,27 +85,37 @@ def _bench_brotli(raw: bytes, level: int = 11) -> tuple[int, float, str]:
     return len(out), ms, ""
 
 
-def _bench_usc_stream(lines: list[str], chunk_lines: int = 250) -> tuple[int, float, str]:
-    tmp_out = OUTDIR / "__tmp_stream.uscstream"
+def _bench_usc_encode(mode: str, log_path: Path, tpl_path: Path | None, lines: int, chunk_lines: int, packet_events: int, zstd_level: int) -> tuple[int, float, str]:
+    """
+    Runs: python -m usc encode --mode <mode> ...
+    Returns output bytes and wall-clock time.
+    """
+    tmp_out = OUTDIR / f"__tmp_{mode.replace('-', '_')}.bin"
+
     cmd = [
-        "python",
-        "-m",
-        "usc",
-        "encode",
-        "--mode",
-        "stream",
-        "--out",
-        str(tmp_out),
-        "--lines",
-        str(len(lines)),
-        "--chunk_lines",
-        str(chunk_lines),
+        "python", "-m", "usc", "encode",
+        "--mode", mode,
+        "--log", str(log_path),
+        "--out", str(tmp_out),
+        "--lines", str(lines),
+        "--zstd", str(zstd_level),
     ]
+
+    if mode == "stream":
+        cmd += ["--chunk_lines", str(chunk_lines)]
+    else:
+        # HOT/COLD modes require templates
+        if tpl_path is None or not tpl_path.exists():
+            return 0, 0.0, "tpl missing (skipped)"
+        cmd += ["--tpl", str(tpl_path), "--packet_events", str(packet_events)]
+
     t0 = time.time()
     code = subprocess.call(cmd, cwd=str(ROOT), env={**os.environ, "PYTHONPATH": str(ROOT / "src")})
     ms = (time.time() - t0) * 1000.0
+
     if code != 0 or not tmp_out.exists():
-        return 0, ms, "usc stream failed"
+        return 0, ms, "usc encode failed"
+
     out_bytes = tmp_out.stat().st_size
     tmp_out.unlink(missing_ok=True)
     return out_bytes, ms, ""
@@ -116,9 +125,11 @@ def main():
     if not MANIFEST.exists():
         raise SystemExit(f"Manifest missing: {MANIFEST}")
 
-    # Safe defaults
+    # Defaults (safe)
     LINES = int(os.environ.get("USC_SUITE_LINES", "20000"))
     CHUNK_LINES = int(os.environ.get("USC_SUITE_CHUNK_LINES", "250"))
+    PACKET_EVENTS = int(os.environ.get("USC_SUITE_PACKET_EVENTS", "32768"))
+    ZSTD_LEVEL = int(os.environ.get("USC_SUITE_ZSTD", "10"))
 
     results: list[RunResult] = []
 
@@ -127,17 +138,20 @@ def main():
 
     for row in rows:
         name = row["name"].strip()
-        path = (ROOT / row["path"].strip()).resolve()
+        log_path = (ROOT / row["log"].strip()).resolve()
 
-        if not path.exists():
-            print(f"[SKIP] {name} missing file: {path}")
+        tpl_val = (row.get("tpl") or "").strip()
+        tpl_path = (ROOT / tpl_val).resolve() if tpl_val else None
+
+        if not log_path.exists():
+            print(f"[SKIP] {name} missing log: {log_path}")
             continue
 
         print(f"\n=== DATASET: {name} ===")
-        lines = _read_first_n_lines(path, LINES)
-        raw = _bytes_of_text(lines)
+        lines_list = _read_first_n_lines(log_path, LINES)
+        raw = _bytes_of_text(lines_list)
         raw_bytes = len(raw)
-        print(f"lines={len(lines)} raw={raw_bytes/1024/1024:.2f} MB")
+        print(f"lines={len(lines_list)} raw={raw_bytes/1024/1024:.2f} MB")
 
         def add(method: str, out_bytes: int, ms: float, note: str):
             results.append(RunResult(
@@ -150,10 +164,11 @@ def main():
                 note=note,
             ))
             if out_bytes > 0:
-                print(f"{method:10} {out_bytes/1024:.2f} KB  ratio {raw_bytes/max(out_bytes,1):.2f}x  {ms:.1f} ms {note}")
+                print(f"{method:14} {out_bytes/1024:.2f} KB  ratio {raw_bytes/max(out_bytes,1):.2f}x  {ms:.1f} ms {note}")
             else:
-                print(f"{method:10} (skipped) {note}")
+                print(f"{method:14} (skipped) {note}")
 
+        # Baselines
         out_bytes, ms, note = _bench_gzip(raw)
         add("gzip", out_bytes, ms, note)
 
@@ -163,8 +178,19 @@ def main():
         out_bytes, ms, note = _bench_brotli(raw, 11)
         add("brotli-11", out_bytes, ms, note)
 
-        out_bytes, ms, note = _bench_usc_stream(lines, CHUNK_LINES)
+        # USC universal
+        out_bytes, ms, note = _bench_usc_encode("stream", log_path, None, len(lines_list), CHUNK_LINES, PACKET_EVENTS, ZSTD_LEVEL)
         add("USC-STREAM", out_bytes, ms, note)
+
+        # USC templated modes (only if tpl exists)
+        out_bytes, ms, note = _bench_usc_encode("hot-lite", log_path, tpl_path, len(lines_list), CHUNK_LINES, PACKET_EVENTS, ZSTD_LEVEL)
+        add("USC-HOT-LITE", out_bytes, ms, note)
+
+        out_bytes, ms, note = _bench_usc_encode("hot", log_path, tpl_path, len(lines_list), CHUNK_LINES, PACKET_EVENTS, ZSTD_LEVEL)
+        add("USC-HOT", out_bytes, ms, note)
+
+        out_bytes, ms, note = _bench_usc_encode("cold", log_path, tpl_path, len(lines_list), CHUNK_LINES, PACKET_EVENTS, ZSTD_LEVEL)
+        add("USC-COLD", out_bytes, ms, note)
 
     out_json = OUTDIR / "bench_real_suite.json"
     out_json.write_text(json.dumps([asdict(x) for x in results], indent=2))

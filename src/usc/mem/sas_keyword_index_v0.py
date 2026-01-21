@@ -1,35 +1,29 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Dict, List, Set, Optional, Any, Tuple
 
 import hashlib
 import re
+import json
 
 from usc.mem.sas_dict_token_v1 import (
     MAGIC_SASD,
     MAGIC_SASA,
     _decode_dict_packet,
-    _decode_data_packet,
 )
 
-# Tokenizer: words >= 3 chars (letters/numbers/_), lowercase
+from usc.mem.sas_dict_token_v1 import decode_sas_packets_to_lines
+
 RE_WORD = re.compile(r"[A-Za-z0-9_]{3,}")
 
 
 def _hash64(s: str) -> int:
-    """
-    Stable 64-bit hash using blake2b.
-    """
     h = hashlib.blake2b(s.encode("utf-8", errors="replace"), digest_size=8).digest()
     return int.from_bytes(h, "little", signed=False)
 
 
 def _k_hashes(h64: int, k: int, m_bits: int) -> List[int]:
-    """
-    Derive k bloom positions from a base 64-bit hash.
-    Uses a simple mixing sequence.
-    """
     out: List[int] = []
     x = h64 & ((1 << 64) - 1)
     for i in range(k):
@@ -39,15 +33,11 @@ def _k_hashes(h64: int, k: int, m_bits: int) -> List[int]:
 
 
 def _set_bit(bits: bytearray, pos: int) -> None:
-    byte_i = pos >> 3
-    bit_i = pos & 7
-    bits[byte_i] |= (1 << bit_i)
+    bits[pos >> 3] |= (1 << (pos & 7))
 
 
 def _get_bit(bits: bytes, pos: int) -> bool:
-    byte_i = pos >> 3
-    bit_i = pos & 7
-    return (bits[byte_i] >> bit_i) & 1 == 1
+    return (bits[pos >> 3] >> (pos & 7)) & 1 == 1
 
 
 def _tokenize_text(s: str) -> List[str]:
@@ -55,36 +45,16 @@ def _tokenize_text(s: str) -> List[str]:
 
 
 def _stem_lite(word: str) -> str:
-    """
-    Very cheap stemming:
-      evaluating -> evaluate
-      decided -> decid
-      errors -> error
-    Not linguistically perfect, but good enough for logs.
-    """
     w = word.lower()
     if len(w) <= 3:
         return w
-
-    # common suffixes
-    for suf in ("ing", "edly", "edly", "edly", "edly", "edly"):
-        if w.endswith(suf) and len(w) > len(suf) + 2:
-            return w[: -len(suf)]
-
     for suf in ("ing", "ed", "es", "s"):
         if w.endswith(suf) and len(w) > len(suf) + 2:
             return w[: -len(suf)]
-
     return w
 
 
 def _variants_for_keyword(kw: str, enable_stem: bool, prefix_len: int) -> Set[str]:
-    """
-    Generate matching variants:
-      - original
-      - stemmed (optional)
-      - prefix token (optional), like "pref:evalu"
-    """
     out = set()
     k = kw.strip().lower()
     if not k:
@@ -97,26 +67,53 @@ def _variants_for_keyword(kw: str, enable_stem: bool, prefix_len: int) -> Set[st
 
     if prefix_len and len(k) >= prefix_len:
         out.add(f"pref:{k[:prefix_len]}")
-
         if enable_stem:
             ks = _stem_lite(k)
             if len(ks) >= prefix_len:
                 out.add(f"pref:{ks[:prefix_len]}")
-
     return out
+
+
+def _flatten_payload(payload: object, out: List[Tuple[str, object]], prefix: str = "") -> None:
+    if isinstance(payload, dict):
+        for k, v in payload.items():
+            kp = f"{prefix}.{k}" if prefix else str(k)
+            _flatten_payload(v, out, kp)
+    elif isinstance(payload, list):
+        for i, v in enumerate(payload):
+            kp = f"{prefix}[{i}]"
+            _flatten_payload(v, out, kp)
+    else:
+        out.append((prefix, payload))
+
+
+def _try_parse_payload_from_line(line: str) -> Optional[dict]:
+    """
+    Expected tool line shape:
+      tool_call::X rid=... payload={...}
+    """
+    if "payload=" not in line:
+        return None
+    try:
+        p = line.split("payload=", 1)[1].strip()
+        return json.loads(p)
+    except Exception:
+        return None
+
+
+def _try_parse_tool_from_line(line: str) -> Optional[str]:
+    if "tool_call::" not in line:
+        return None
+    try:
+        after = line.split("tool_call::", 1)[1]
+        tool = after.split(" ", 1)[0].strip()
+        return tool if tool else None
+    except Exception:
+        return None
 
 
 @dataclass
 class SASKeywordIndex:
-    """
-    Bloom filter per data packet (packet index 1..N-1).
-
-    packet_blooms[j] corresponds to packets index (j+1)
-
-    keyword_df: approximate document frequency (#packets where keyword variant appears).
-      - used for rarest-first planning
-      - variants include pref:* tokens too
-    """
     m_bits: int
     k_hashes: int
     packet_blooms: List[bytes]
@@ -130,26 +127,18 @@ def build_keyword_index(
     k_hashes: int = 4,
     include_tool_names: bool = True,
     include_raw_lines: bool = True,
+    include_payload_fields: bool = True,
     enable_stem: bool = True,
     prefix_len: int = 5,
 ) -> SASKeywordIndex:
-    """
-    Build a Bloom filter index over packets without fully decoding everything.
-
-    What we index:
-      - Raw line words if include_raw_lines
-      - Tool name tokens "tool:web.search_query" if include_tool_names
-      - Optional:
-          stem-lites for words
-          prefix tokens pref:xxxxx (helps 'evaluate' match 'evaluating')
-    """
     if not packets:
         return SASKeywordIndex(m_bits=m_bits, k_hashes=k_hashes, packet_blooms=[], total_packets=0, keyword_df={})
 
     if not packets[0].startswith(MAGIC_SASD):
         raise ValueError("Not a SAS dict-token v1 stream")
 
-    d = _decode_dict_packet(packets[0])
+    # Validate dict packet
+    _ = _decode_dict_packet(packets[0])
 
     if m_bits % 8 != 0:
         raise ValueError("m_bits must be multiple of 8")
@@ -158,7 +147,7 @@ def build_keyword_index(
     packet_blooms: List[bytes] = []
     keyword_df: Dict[str, int] = {}
 
-    # data packets start at index 1
+    # Iterate each data packet; decode lines for bulletproof parsing
     for pi in range(1, len(packets)):
         pkt = packets[pi]
         if not pkt.startswith(MAGIC_SASA):
@@ -166,34 +155,55 @@ def build_keyword_index(
             continue
 
         bits = bytearray(bloom_bytes)
-        entries = _decode_data_packet(pkt)
-
         seen_in_packet: Set[str] = set()
 
-        for (_dt_us, _ts_style, tool_id, _rid16, raw_body, _payload_tok) in entries:
-            if tool_id == 0:
-                if include_raw_lines:
-                    text = raw_body.decode("utf-8", errors="replace")
-                    for w in _tokenize_text(text):
-                        for v in _variants_for_keyword(w, enable_stem=enable_stem, prefix_len=prefix_len):
-                            seen_in_packet.add(v)
+        # Decode ONLY this packet + dict
+        lines = decode_sas_packets_to_lines([packets[0], pkt])
 
-                continue
+        for ln in lines:
+            lnl = ln.lower()
 
+            # index raw words for plain queries
+            if include_raw_lines:
+                for w in _tokenize_text(ln):
+                    for v in _variants_for_keyword(w, enable_stem=enable_stem, prefix_len=prefix_len):
+                        seen_in_packet.add(v)
+
+            # tool indexing
             if include_tool_names:
-                tid = int(tool_id)
-                tool_name = "UNKNOWN"
-                if 1 <= tid <= len(d.id_to_tool):
-                    tool_name = d.id_to_tool[tid - 1]
-                kw = f"tool:{tool_name}".lower()
-                seen_in_packet.add(kw)
+                tool = _try_parse_tool_from_line(ln)
+                if tool:
+                    seen_in_packet.add(f"tool:{tool}".lower())
 
-        # set bloom bits and update DF
-        for v in seen_in_packet:
-            h64 = _hash64(v)
+            # payload indexing
+            if include_payload_fields:
+                payload = _try_parse_payload_from_line(ln)
+                if payload is not None:
+                    flat: List[Tuple[str, object]] = []
+                    _flatten_payload(payload, flat)
+
+                    for keypath, val in flat:
+                        if not keypath:
+                            continue
+
+                        kp = keypath.lower()
+                        seen_in_packet.add(f"k:{kp}")
+
+                        if isinstance(val, str):
+                            vv = val.strip().lower()
+                            if vv:
+                                seen_in_packet.add(f"v:{vv}")
+                                seen_in_packet.add(f"kv:{kp}={vv}")
+                        elif isinstance(val, (int, float, bool)):
+                            seen_in_packet.add(f"kv:{kp}={val}")
+                            seen_in_packet.add(f"n:{kp}={int(val) if isinstance(val, bool) else val}")
+
+        # Set bloom bits and update DF
+        for tok in seen_in_packet:
+            h64 = _hash64(tok)
             for pos in _k_hashes(h64, k_hashes, m_bits):
                 _set_bit(bits, pos)
-            keyword_df[v] = keyword_df.get(v, 0) + 1
+            keyword_df[tok] = keyword_df.get(tok, 0) + 1
 
         packet_blooms.append(bytes(bits))
 
@@ -214,32 +224,23 @@ def query_packets_for_keywords(
     prefix_len: int = 5,
     require_all: bool = True,
 ) -> Set[int]:
-    """
-    Return packet indices (in the packets list) that might contain the keywords.
-    Uses Bloom filter membership test.
-
-    If require_all=True:
-      - packet must match ALL keywords (Bloom AND)
-    else:
-      - match ANY keyword (Bloom OR)
-    """
-    if not keywords:
+    if not keywords or not packets:
         return set()
 
-    if not packets:
-        return set()
-
-    # normalize -> variants per keyword
     kw_groups: List[Set[str]] = []
     for k in keywords:
-        vs = _variants_for_keyword(k, enable_stem=enable_stem, prefix_len=prefix_len)
-        if vs:
-            kw_groups.append(vs)
+        k = k.strip().lower()
+        if not k:
+            continue
+
+        if any(k.startswith(pfx) for pfx in ("k:", "v:", "kv:", "n:", "tool:")):
+            kw_groups.append({k})
+        else:
+            kw_groups.append(_variants_for_keyword(k, enable_stem=enable_stem, prefix_len=prefix_len))
 
     if not kw_groups:
         return set()
 
-    # precompute positions for every variant
     variant_positions: Dict[str, List[int]] = {}
     for group in kw_groups:
         for v in group:
@@ -248,7 +249,6 @@ def query_packets_for_keywords(
 
     out: Set[int] = set()
 
-    # packet_blooms[j] corresponds to packet index (j+1)
     for j, bits in enumerate(kwi.packet_blooms):
         pi = j + 1
         if pi >= len(packets):
@@ -257,7 +257,6 @@ def query_packets_for_keywords(
         if require_all:
             ok = True
             for group in kw_groups:
-                # group matches if ANY variant matches
                 g_ok = False
                 for v in group:
                     pos_list = variant_positions[v]
@@ -270,7 +269,6 @@ def query_packets_for_keywords(
             if ok:
                 out.add(pi)
         else:
-            # OR mode
             hit = False
             for group in kw_groups:
                 for v in group:

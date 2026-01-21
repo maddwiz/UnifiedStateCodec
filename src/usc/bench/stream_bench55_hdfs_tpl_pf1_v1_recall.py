@@ -3,7 +3,7 @@ from typing import List
 
 from usc.mem.hdfs_templates_v0 import HDFSTemplateBank, parse_hdfs_lines
 from usc.mem.tpl_pf1_recall_v0 import build_tpl_pf1_blob as build_v0, recall_event_id as recall_v0
-from usc.mem.tpl_pf1_recall_v1 import build_tpl_pf1_blob as build_v1, recall_event_id as recall_v1
+from usc.mem.tpl_pf1_recall_v1 import build_tpl_pf1_blob as build_v1, build_pf1_index, recall_event_id_index
 
 
 def read_first_n_lines(path: str, n: int) -> List[str]:
@@ -45,7 +45,7 @@ def main():
     with open(args.tpl, "r", errors="replace") as f:
         tpl_text = f.read()
 
-    print("STREAM_BENCH55 — PF1 v0 bloom vs PF1 v1 exact EventID sets")
+    print("STREAM_BENCH55 — PF1 v0 bloom vs PF1 v1 exact EventID sets (CACHED INDEX)")
     print(f"lines: {len(lines)}")
     print(f"RAW: {pretty(len(raw_bytes))}")
     print(f"packet_events(v1): {args.packet_events}")
@@ -61,8 +61,13 @@ def main():
     blob1, meta1 = build_v1(events, unknown, tpl_text, packet_events=args.packet_events, zstd_level=10)
     t_build1 = (time.perf_counter() - t0) * 1000
 
+    # cache index for v1
+    t0 = time.perf_counter()
+    idx1 = build_pf1_index(blob1)
+    t_index = (time.perf_counter() - t0) * 1000
+
     print(f"PF1 v0 blob: {pretty(len(blob0))}  ratio={len(raw_bytes)/len(blob0):.2f}x  build={t_build0:.2f} ms  packets={meta0.packet_count}")
-    print(f"PF1 v1 blob: {pretty(len(blob1))}  ratio={len(raw_bytes)/len(blob1):.2f}x  build={t_build1:.2f} ms  packets={meta1.packet_count}")
+    print(f"PF1 v1 blob: {pretty(len(blob1))}  ratio={len(raw_bytes)/len(blob1):.2f}x  build={t_build1:.2f} ms  packets={meta1.packet_count}  index={t_index:.2f} ms")
     print("-" * 60)
 
     test_eids = [3, 6, 14]
@@ -72,7 +77,7 @@ def main():
         dt0 = (time.perf_counter() - t0) * 1000
 
         t0 = time.perf_counter()
-        h1 = recall_v1(blob1, eid, limit=args.limit)
+        h1 = recall_event_id_index(idx1, blob1, eid, limit=args.limit)
         dt1 = (time.perf_counter() - t0) * 1000
 
         print(f"E{eid:<2}  v0 hits={len(h0):<3} time={dt0:8.2f} ms   |   v1 hits={len(h1):<3} time={dt1:8.2f} ms")

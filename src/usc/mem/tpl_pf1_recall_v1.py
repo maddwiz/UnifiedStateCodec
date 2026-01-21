@@ -1,6 +1,7 @@
 import struct
 from dataclasses import dataclass
 from typing import Dict, List, Tuple
+from bisect import bisect_left
 
 try:
     import zstandard as zstd
@@ -85,57 +86,84 @@ def load_template_map_from_csv_text(csv_text: str) -> Dict[int, str]:
 
 
 # ----------------------------
-# decode H1M1 raw_struct (minimal)
+# decode helpers (FULL type support)
 # ----------------------------
 
 def _zigzag_decode(u: int) -> int:
     return (u >> 1) ^ (-(u & 1))
 
 
-def _decode_int_stream(buf: bytes, off: int) -> Tuple[List[int], int]:
-    n, off = _uvarint_decode(buf, off)
-    out: List[int] = []
+def _decode_int_stream_gen(payload: bytes):
+    off = 0
+    n, off = _uvarint_decode(payload, off)
     if n == 0:
-        return out, off
-    first_u, off = _uvarint_decode(buf, off)
-    out.append(_zigzag_decode(first_u))
-    prev = out[0]
+        return
+    first_u, off = _uvarint_decode(payload, off)
+    prev = _zigzag_decode(first_u)
+    yield prev
     for _ in range(n - 1):
-        du, off = _uvarint_decode(buf, off)
+        du, off = _uvarint_decode(payload, off)
         prev = prev + _zigzag_decode(du)
-        out.append(prev)
-    return out, off
+        yield prev
 
 
-def _decode_str_stream(buf: bytes, off: int) -> Tuple[List[str], int]:
-    n, off = _uvarint_decode(buf, off)
-    out: List[str] = []
+def _decode_raw_stream_gen(payload: bytes):
+    off = 0
+    n, off = _uvarint_decode(payload, off)
     for _ in range(n):
-        b, off = _bytes_decode(buf, off)
-        out.append(b.decode("utf-8", errors="replace"))
-    return out, off
+        b, off = _bytes_decode(payload, off)
+        yield b.decode("utf-8", errors="replace")
 
 
-def _decode_dict_stream(buf: bytes, off: int) -> Tuple[List[str], int]:
-    nvals, off = _uvarint_decode(buf, off)
-    vocab_n, off = _uvarint_decode(buf, off)
+def _decode_hex_stream_gen(payload: bytes):
+    off = 0
+    n, off = _uvarint_decode(payload, off)
+    for _ in range(n):
+        b, off = _bytes_decode(payload, off)
+        yield b.hex()
+
+
+def _decode_ip_stream_gen(payload: bytes):
+    off = 0
+    n, off = _uvarint_decode(payload, off)
+    for _ in range(n):
+        if off + 4 > len(payload):
+            raise ValueError("ip decode overflow")
+        b = payload[off:off+4]
+        off += 4
+        yield ".".join(str(x) for x in b)
+
+
+def _decode_dict_stream_gen(payload: bytes):
+    off = 0
+    nvals, off = _uvarint_decode(payload, off)
+    vocab_n, off = _uvarint_decode(payload, off)
     vocab: List[str] = []
     for _ in range(vocab_n):
-        b, off = _bytes_decode(buf, off)
+        b, off = _bytes_decode(payload, off)
         vocab.append(b.decode("utf-8", errors="replace"))
-    out: List[str] = []
     for _ in range(nvals):
-        idx, off = _uvarint_decode(buf, off)
+        idx, off = _uvarint_decode(payload, off)
         if vocab:
-            out.append(vocab[min(idx, len(vocab)-1)])
+            yield vocab[min(idx, len(vocab) - 1)]
         else:
-            out.append("")
-    return out, off
+            yield ""
 
 
-def decode_h1m1_raw_struct(raw: bytes) -> Tuple[List[Tuple[int, List[str]]], List[str]]:
+def _bit_set(mask: bytes, i: int) -> bool:
+    return bool(mask[i // 8] & (1 << (i % 8)))
+
+
+def decode_h1m1_select_params(raw: bytes, target_eid: int) -> List[List[str]]:
+    """
+    FAST selective decode:
+      - parse EventIDs
+      - find row indices where eid == target_eid
+      - decode ONLY values for those rows (skip everything else)
+    """
     if raw[:4] != b"H1M1":
         raise ValueError("bad H1M1 magic")
+
     off = 4
     _ver = struct.unpack("<I", raw[off:off+4])[0]
     off += 4
@@ -145,12 +173,24 @@ def decode_h1m1_raw_struct(raw: bytes) -> Tuple[List[Tuple[int, List[str]]], Lis
     max_params, off = _uvarint_decode(raw, off)
 
     eids: List[int] = []
-    for _ in range(n_events):
+    hit_rows: List[int] = []
+    te = int(target_eid)
+
+    for i in range(n_events):
         eid, off = _uvarint_decode(raw, off)
-        eids.append(int(eid))
+        eid = int(eid)
+        eids.append(eid)
+        if eid == te:
+            hit_rows.append(i)
 
-    params_mat: List[List[str]] = [[""] * max_params for _ in range(n_events)]
+    if not hit_rows:
+        # still must skip channels + unknown for caller? no, caller only needs hits
+        return []
 
+    hitset = set(hit_rows)
+    hits_out: Dict[int, List[str]] = {r: [""] * max_params for r in hit_rows}
+
+    # decode channels
     for chan in range(max_params):
         mask_len, off = _uvarint_decode(raw, off)
         mask = raw[off:off+mask_len]
@@ -159,35 +199,75 @@ def decode_h1m1_raw_struct(raw: bytes) -> Tuple[List[Tuple[int, List[str]]], Lis
         ctype, off = _uvarint_decode(raw, off)
         payload, off = _bytes_decode(raw, off)
 
-        poff = 0
+        # if none of the hit rows are active in this channel, skip payload decode entirely ✅
+        any_hit = False
+        for r in hit_rows:
+            if _bit_set(mask, r):
+                any_hit = True
+                break
+        if not any_hit:
+            continue
+
         if ctype == 1:
-            vals_i, _ = _decode_int_stream(payload, poff)
-            vals = [str(x) for x in vals_i]
+            gen = _decode_int_stream_gen(payload)
+            for i in range(n_events):
+                if _bit_set(mask, i):
+                    v = next(gen)
+                    if i in hitset:
+                        hits_out[i][chan] = str(v)
+        elif ctype == 2:
+            gen = _decode_hex_stream_gen(payload)
+            for i in range(n_events):
+                if _bit_set(mask, i):
+                    v = next(gen)
+                    if i in hitset:
+                        hits_out[i][chan] = v
+        elif ctype == 3:
+            gen = _decode_ip_stream_gen(payload)
+            for i in range(n_events):
+                if _bit_set(mask, i):
+                    v = next(gen)
+                    if i in hitset:
+                        hits_out[i][chan] = v
         elif ctype == 4:
-            vals, _ = _decode_dict_stream(payload, poff)
+            gen = _decode_dict_stream_gen(payload)
+            for i in range(n_events):
+                if _bit_set(mask, i):
+                    v = next(gen)
+                    if i in hitset:
+                        hits_out[i][chan] = v
         else:
-            vals, _ = _decode_str_stream(payload, poff)
+            gen = _decode_raw_stream_gen(payload)
+            for i in range(n_events):
+                if _bit_set(mask, i):
+                    v = next(gen)
+                    if i in hitset:
+                        hits_out[i][chan] = v
 
-        vi = 0
-        for row in range(n_events):
-            if mask[row // 8] & (1 << (row % 8)):
-                if vi < len(vals):
-                    params_mat[row][chan] = vals[vi]
-                vi += 1
-
-    events = [(eids[i], params_mat[i]) for i in range(n_events)]
-
-    unknown: List[str] = []
+    # skip unknown lines block (we don't need to parse them here, but we must advance)
     for _ in range(n_unknown):
-        b, off = _bytes_decode(raw, off)
-        unknown.append(b.decode("utf-8", errors="replace"))
+        _, off = _bytes_decode(raw, off)
 
-    return events, unknown
+    # return hit params in original order
+    return [hits_out[r] for r in hit_rows]
 
 
 # ----------------------------
 # PF1 v1 packet format
 # ----------------------------
+
+@dataclass
+class PF1Packet:
+    offset: int
+    length: int
+    eids_sorted: List[int]
+
+
+@dataclass
+class PF1Index:
+    templates_map: Dict[int, str]
+    packets: List[PF1Packet]
+
 
 @dataclass
 class PF1Meta:
@@ -210,7 +290,6 @@ def _zstd_decompress(b: bytes) -> bytes:
 
 
 def _encode_eidset(eids: List[int]) -> bytes:
-    # delta-encoded sorted unique
     s = sorted(set(int(x) for x in eids))
     out = bytearray()
     out += _uvarint_encode(len(s))
@@ -240,25 +319,6 @@ def build_tpl_pf1_blob(
     packet_events: int = 32768,
     zstd_level: int = 10,
 ) -> Tuple[bytes, PF1Meta]:
-    """
-    PF1 v1:
-      - packetized chunks (bigger default)
-      - exact EventID set per packet (no bloom false positives)
-
-    Layout:
-      MAGIC 'TPF1'
-      u32 VERSION=1
-      u32 zstd_level
-      u32 packet_events
-      u32 template_csv_len
-      template_csv_bytes
-      uvarint packet_count
-      For each packet:
-        u32 offset
-        u32 length
-        eidset_len (uvarint) + eidset_bytes
-      packet_bytes...
-    """
     tpl_bytes = template_csv_text.encode("utf-8", errors="replace")
 
     packets: List[bytes] = []
@@ -289,16 +349,15 @@ def build_tpl_pf1_blob(
 
     table_start = len(out)
     for pkt, eidset in zip(packets, eidsets):
-        out += struct.pack("<I", 0)         # offset placeholder
-        out += struct.pack("<I", len(pkt))  # length
-        out += _bytes_encode(eidset)        # eidset payload
+        out += struct.pack("<I", 0)
+        out += struct.pack("<I", len(pkt))
+        out += _bytes_encode(eidset)
 
     offsets: List[int] = []
     for pkt in packets:
         offsets.append(len(out))
         out += pkt
 
-    # patch offsets
     off = table_start
     for po in offsets:
         out[off:off+4] = struct.pack("<I", po)
@@ -316,7 +375,7 @@ def build_tpl_pf1_blob(
     return bytes(out), meta
 
 
-def recall_event_id(blob: bytes, event_id: int, limit: int = 50) -> List[str]:
+def build_pf1_index(blob: bytes) -> PF1Index:
     if blob[:4] != MAGIC:
         raise ValueError("bad PF1 magic")
 
@@ -335,39 +394,52 @@ def recall_event_id(blob: bytes, event_id: int, limit: int = 50) -> List[str]:
     off += 4
     tpl_bytes = blob[off:off+tpl_len]
     off += tpl_len
+    templates_map = load_template_map_from_csv_text(tpl_bytes.decode("utf-8", errors="replace"))
 
     packet_count, off = _uvarint_decode(blob, off)
 
-    tmap = load_template_map_from_csv_text(tpl_bytes.decode("utf-8", errors="replace"))
-
-    table: List[Tuple[int, int, List[int]]] = []
+    packets: List[PF1Packet] = []
     for _ in range(packet_count):
         pkt_off = struct.unpack("<I", blob[off:off+4])[0]
         off += 4
         pkt_len = struct.unpack("<I", blob[off:off+4])[0]
         off += 4
         eidset_bytes, off = _bytes_decode(blob, off)
-        eids = _decode_eidset(eidset_bytes)
-        table.append((pkt_off, pkt_len, eids))
+        eids_sorted = _decode_eidset(eidset_bytes)
+        packets.append(PF1Packet(offset=int(pkt_off), length=int(pkt_len), eids_sorted=eids_sorted))
 
+    return PF1Index(templates_map=templates_map, packets=packets)
+
+
+def _sorted_contains(arr: List[int], x: int) -> bool:
+    i = bisect_left(arr, x)
+    return i < len(arr) and arr[i] == x
+
+
+def recall_event_id_index(index: PF1Index, blob: bytes, event_id: int, limit: int = 50) -> List[str]:
     hits: List[str] = []
     eid = int(event_id)
 
-    for pkt_off, pkt_len, eids in table:
-        if eid not in eids:
+    for pkt in index.packets:
+        if not _sorted_contains(pkt.eids_sorted, eid):
             continue
-        comp = blob[pkt_off:pkt_off+pkt_len]
-        raw = _zstd_decompress(comp)
-        events, _unknown = decode_h1m1_raw_struct(raw)
 
-        for peid, params in events:
-            if peid == eid:
-                tpl = tmap.get(peid, "")
-                if tpl:
-                    hits.append(render_template(tpl, params))
-                else:
-                    hits.append(f"E{peid} " + " | ".join(params))
-                if len(hits) >= limit:
-                    return hits
+        comp = blob[pkt.offset:pkt.offset+pkt.length]
+        raw = _zstd_decompress(comp)
+
+        hit_params = decode_h1m1_select_params(raw, eid)
+        if not hit_params:
+            continue
+
+        tpl = index.templates_map.get(eid, "")
+
+        for params in hit_params:
+            if tpl:
+                hits.append(render_template(tpl, params))
+            else:
+                hits.append(f"E{eid} " + " | ".join(params))
+
+            if len(hits) >= limit:
+                return hits
 
     return hits

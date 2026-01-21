@@ -634,3 +634,110 @@ def _encode_int_nonempty(values):
         out += _svarint_encode(x - prev)
         prev = x
     return bytes(out)
+
+
+# ============================================================
+# TYPED SLOT RESTORE (INT + IP + HEX + DICT + RAW) w/ SAFETY
+# ============================================================
+
+import re as _re_typing
+
+_INT_RE2 = _re_typing.compile(r"^-?\d+$")
+_HEX_RE2 = _re_typing.compile(r"^[0-9a-fA-F]{6,}$")
+_IP_RE2  = _re_typing.compile(r"^\d{1,3}(\.\d{1,3}){3}$")
+
+
+def _all_int_safe2(vals: list[str]) -> bool:
+    if not vals:
+        return False
+    for v in vals:
+        s = (v or "").strip()
+        if not _INT_RE2.match(s):
+            return False
+    return True
+
+
+def _all_hex_safe2(vals: list[str]) -> bool:
+    if not vals:
+        return False
+    for v in vals:
+        s = (v or "").strip()
+        if not _HEX_RE2.match(s):
+            return False
+    return True
+
+
+def _all_ip_safe2(vals: list[str]) -> bool:
+    if not vals:
+        return False
+    for v in vals:
+        s = (v or "").strip()
+        if not _IP_RE2.match(s):
+            return False
+        # validate octets
+        parts = s.split(".")
+        ok = True
+        for p in parts:
+            try:
+                x = int(p)
+            except Exception:
+                ok = False
+                break
+            if x < 0 or x > 255:
+                ok = False
+                break
+        if not ok:
+            return False
+    return True
+
+
+def _choose_type(values_nonempty, dict_threshold: int = 12):
+    """
+    Restored typed chooser:
+      1 = INT
+      2 = HEX
+      3 = IP
+      4 = DICT
+      5 = RAW
+    """
+    if not values_nonempty:
+        return 5  # RAW
+
+    # ✅ strong types first
+    if _all_int_safe2(values_nonempty):
+        return 1  # INT
+
+    if _all_ip_safe2(values_nonempty):
+        return 3  # IP
+
+    if _all_hex_safe2(values_nonempty):
+        return 2  # HEX
+
+    # ✅ dictionary when repetition is meaningful
+    uniq = set(values_nonempty)
+    if len(values_nonempty) >= dict_threshold and len(uniq) <= max(2, len(values_nonempty) // 4):
+        return 4  # DICT
+
+    return 5  # RAW
+
+
+def _encode_int_nonempty(values):
+    """
+    Safe INT encoder:
+    If any value isn't an int, fall back to RAW.
+    """
+    if not _all_int_safe2(values):
+        return _encode_raw_nonempty(values)
+
+    ints = [int(v.strip()) for v in values]
+    out = bytearray()
+    out += _uvarint_encode(len(ints))
+    if not ints:
+        return bytes(out)
+
+    out += _svarint_encode(ints[0])
+    prev = ints[0]
+    for x in ints[1:]:
+        out += _svarint_encode(x - prev)
+        prev = x
+    return bytes(out)

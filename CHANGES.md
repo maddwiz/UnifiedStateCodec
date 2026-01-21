@@ -1,22 +1,10 @@
 # CHANGES — Unified State Codec (USC)
 
-## 2026-01-19 — Major ODC Milestone
-- Bench19: OuterStream (USC packet stream + outer zstd) achieved ~7.00x vs gzip ~6.25x.
-- Bench20: OuterStream framed + trained zstd dict achieved ~7.18x.
-- Established flagship mode name: USC-ODC (Outer Dictionary Codec).
-- Added/validated components:
-  - outerstream framing module
-  - trained dictionary support
-  - ODC benchmark
-
-## 2026-01-19 — ODC API + Roundtrip Safety
-- Added `usc.api.codec_odc`:
-  - encode packets -> ODC blob
-  - decode ODC blob -> packets
-- Added Bench21 roundtrip validation:
-  - ensures packet byte-identical restoration
-- Updated docs:
-  - ROADMAP.md
-  - FILEMAP.md
-  - MASTER_HANDOFF.md
-  - CHANGES.md
+## 2026-01-21 — Milestone: HOT-LAZY shipped ✅
+- Added HOT-LITE mode (PF1-only) for fast build + ~22x compression.
+- Added BENCH scoreboard (gzip/zstd vs USC hot/cold).
+- Added HOT-LAZY mode: encode PF1-only, then upgrade to PFQ1 fallback on-demand during query.
+- Verified:
+  - HOT-LITE: ~22.65x, FAST query ~86ms
+  - COLD: ~55.64x on HDFS 200k lines
+  - PFQ1 builds once (~11s) then persists in same .usch file

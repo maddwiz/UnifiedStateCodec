@@ -1,56 +1,45 @@
-# Unified State Codec (USC) — Roadmap
+# ROADMAP — Unified State Codec (USC)
 
-## Mission
-Build an AI-native compression system that consistently beats general compressors on agent traces / tool logs,
-and evolves into selective replay + long-context memory infrastructure.
+## Goal
+Build a domain-aware compression system for AI agent logs + structured traces that:
+1) Beats general compressors (gzip/zstd) in ratio for structured data
+2) Supports queryable compressed memory (FAST recall + fallback)
+3) Supports archive mode (max compression)
 
-## Current Status (as of Bench20)
-We achieved a major milestone:
-- USC packetization (v3b) beats gzip on real traces.
-- OuterStream framing + ZSTD dict hits ~7.18x on real agent trace data (Bench20).
-This stack is now called: **USC-ODC** (Outer Dictionary Codec).
+---
 
-## Milestones
+## Phase 0 (Done ✅)
+- PF1: template/event recall index
+- PFQ1: token bloom index fallback search
+- COLD: TPLv1M bundle archive mode (~55x on HDFS 200k)
+- CLI:
+  - encode: hot / hot-lite / hot-lazy / cold
+  - query: FAST-first, optional upgrade to PFQ1
+  - bench: scoreboard table vs gzip/zstd
 
-### ✅ M0 — Baseline USC Packet Stream
-- v3b stream packets (DICT + DATA packets)
-- Chunking + windowing experiments
-- Bench14–Bench18
+---
 
-### ✅ M1 — OuterStream Wrapper
-- Frame packets as a single stream
-- Compress as one blob (OuterStream)
-- Bench19 proved cross-packet redundancy gains
+## Phase 1 (Next)
+- Prove PFQ1 catches queries FAST misses (value-only tokens)
+- Add "upgrade cache" so PFQ1 build uses pre-parsed events (avoid reread/parse)
+- Add real log datasets beyond HDFS:
+  - Open-source agent traces
+  - Tool-call logs (JSON)
+- Add packaging:
+  - pip installable CLI
+  - versioned releases
+  - minimal examples folder
 
-### ✅ M2 — OuterStream + Trained Dictionary (ODC)
-- OuterStream framed bytes + trained zstd dict
-- Bench20 hit ~7.18x on real trace
+---
 
-### ✅ M3 — ODC Encode/Decode API (NOW)
-- Implement `usc.api.codec_odc`
-- Add bench21 roundtrip validation
+## Phase 2 (Product-level)
+- Persistent global dictionaries across files (stream compression)
+- Drain3 template miner integration for unknown log formats
+- Selective decode indexing (query returns offsets without full decode)
+- Optional lossy memory modes (utility-based gisting)
 
-### 🔜 M4 — CLI + “Drop-in SDK”
-- `usc encode --mode odc`
-- `usc decode --mode odc`
-- Output stats + verify mode
+---
 
-### 🔜 M5 — Real Dataset Bench Suite
-- Public log datasets
-- Agent trace captures
-- Compare: gzip / zstd / brotli / msgpack+c / dict zstd trained
-
-### 🔜 M6 — Selective Replay + Indexing
-- Packet-level index
-- Decode only matching ranges
-- Optional query keyword index / template index
-
-### 🔜 M7 — Template Mining Upgrade (Drain-style)
-- Stronger template extraction (Drain3-style)
-- Persistent dictionaries
-- Session-level compression wins
-
-### 🔜 M8 — “Agent Memory Product Mode”
-- Lossless mode (always exact)
-- Utility mode (optional lossy gisting)
-- Retrieval friendly storage format
+## Phase 3 (Publish / traction)
+- Public benchmarks: datasets, scripts, reproducible results
+- Blog + arXiv-style writeup with plots and ablations

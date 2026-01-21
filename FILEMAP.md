@@ -1,36 +1,28 @@
 # FILEMAP — Unified State Codec (USC)
 
-## Core Modules
+## src/usc/cli/
+- app.py
+  - encode: hot / hot-lite / hot-lazy / cold
+  - query: FAST-first + optional upgrade to PFQ1
+  - bench: gzip/zstd vs USC scoreboard
 
-### Packetization (USC v3b)
-- `src/usc/mem/stream_proto_canz_v3b.py`
-  - Builds dict packet + data packets
-  - Encodes structured stream
+## src/usc/mem/
+- hdfs_templates_v0.py
+  - template bank loading + parsing
+- tpl_pf1_recall_v1.py
+  - PF1 builder (FAST recall index)
+- tpl_pfq1_query_v1.py
+  - PFQ1 builder (bloom token index)
+- tpl_fast_query_v1.py
+  - FAST query against PF1
+- tpl_query_router_v1.py
+  - router: FAST → PFQ1 fallback
 
-### ZSTD Dictionary Support
-- `src/usc/mem/zstd_trained_dict.py`
-  - Safe dictionary training with conservative sizing
-  - Plain zstd helpers
+## src/usc/api/
+- hdfs_template_codec_v1m_bundle.py
+  - cold bundle encoder (max ratio archive)
 
-### Outer Stream Wrapper
-- `src/usc/mem/outerstream_zstd.py`
-  - Frames packets into one byte stream
-  - Compress/decompress outer layer (plain zstd)
-
-### ODC (Outer Dictionary Codec)
-- `src/usc/api/codec_odc.py`
-  - ODC encode/decode API
-  - Text -> packets -> ODC blob
-  - Blob -> packets
-
-## Benchmarks
-- `src/usc/bench/stream_bench19_outerstream.py`
-  - USC packets + outer zstd pass
-- `src/usc/bench/stream_bench20_outerstream_dict.py`
-  - OuterStream framed + trained dict zstd
-- `src/usc/bench/stream_bench21_odc_roundtrip.py`
-  - ODC encode/decode roundtrip test
-
-## Datasets
-- `src/usc/bench/datasets_real_agent_trace.py`
-  - Synthetic “real-ish” agent trace generator
+## docs/
+- USC_CLI.md
+- USC_HOT_LAZY.md
+- USC_MODES.md (if present)

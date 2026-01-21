@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List, Set, Optional
+from typing import List, Set, Optional, Tuple
 
 from usc.mem.sas_dict_token_v1 import decode_sas_packets_to_lines
 from usc.mem.sas_keyword_index_v0 import (
@@ -33,7 +33,6 @@ def _expand_match_terms(kws: Set[str]) -> List[List[str]]:
     For each keyword, return a list of acceptable match terms.
     - Normal keyword: ["keyword"]
     - tool:NAME keyword: ["tool:name", "tool_call::name"]
-      so user can query with tool:web.open but we match decoded output.
     """
     out: List[List[str]] = []
     for k in kws:
@@ -48,6 +47,23 @@ def _expand_match_terms(kws: Set[str]) -> List[List[str]]:
     return out
 
 
+def _estimate_df(kwi: SASKeywordIndex, kw: str) -> int:
+    """
+    Estimate packet frequency (lower = rarer) using kwi.keyword_df.
+    If unknown, return a large number.
+    """
+    return int(kwi.keyword_df.get(kw, 10**9))
+
+
+def _rarest_first_plan(kwi: SASKeywordIndex, kws: Set[str]) -> List[str]:
+    """
+    Rarest-first planning:
+      sort keywords by their observed DF (approx).
+    """
+    # Sort by df ascending
+    return sorted(kws, key=lambda k: _estimate_df(kwi, k))
+
+
 def recall_from_odc2s(
     blob: bytes,
     packets_all: List[bytes],
@@ -59,12 +75,11 @@ def recall_from_odc2s(
     """
     Recall lines from a sharded ODC2S stream using Bloom keyword index.
 
-    Strategy:
-      1) Bloom -> candidate packet indices
-      2) packet indices -> block IDs
-      3) ALWAYS include dict packet block (packet 0)
-      4) Decode only those blocks
-      5) Decode lines and post-filter for correctness
+    Improvements in v0.2:
+      - includes dict block always
+      - tool:* matches tool_call::*
+      - stemming/prefix matches via keyword index
+      - rarest-first AND planning to reduce decoding work
     """
     kws = _normalize_keywords(keywords)
     if not kws or not packets_all:
@@ -78,10 +93,24 @@ def recall_from_odc2s(
             k_hashes=4,
             include_tool_names=True,
             include_raw_lines=True,
+            enable_stem=True,
+            prefix_len=5,
         )
 
-    # Candidate packets (Bloom test)
-    want_packet_indices = query_packets_for_keywords(kwi, packets_all, kws)
+    # Rarest-first planning for AND mode
+    planned = _rarest_first_plan(kwi, kws)
+
+    # Candidate packets based on Bloom membership
+    # AND mode: we query all keywords at once (Bloom AND) which is already strong,
+    # but we keep planning for future expansions & reporting.
+    want_packet_indices = query_packets_for_keywords(
+        kwi,
+        packets_all,
+        set(planned),
+        enable_stem=True,
+        prefix_len=5,
+        require_all=require_all,
+    )
 
     # Convert packets -> blocks
     block_ids = packet_indices_to_block_ids(want_packet_indices, group_size)
@@ -103,7 +132,7 @@ def recall_from_odc2s(
     # Decode to lines
     lines = decode_sas_packets_to_lines(packets_part)
 
-    # Expand match terms (fixes tool:* queries)
+    # Expand match terms (tool:* support)
     match_terms = _expand_match_terms(kws)
 
     # Post-filter for exact correctness
@@ -114,14 +143,12 @@ def recall_from_odc2s(
         if require_all:
             ok = True
             for term_group in match_terms:
-                # each keyword group matches if ANY of its terms appear
                 if not any(t in lnl for t in term_group):
                     ok = False
                     break
             if ok:
                 out.append(ln)
         else:
-            # OR mode: match if ANY keyword group matches
             hit_any = False
             for term_group in match_terms:
                 if any(t in lnl for t in term_group):

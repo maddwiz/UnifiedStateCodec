@@ -19,9 +19,7 @@ _TS_DATE = re.compile(r"\b\d{4}-\d{2}-\d{2}\b")
 
 def _normalize_template(tpl: str) -> str:
     """
-    Make templates robust:
-    Many miners accidentally "freeze" timestamps (e.g., 2015-07-29).
-    We replace explicit timestamps/dates with a wildcard so matching is not date-locked.
+    Replace explicit timestamps/dates with wildcards so templates aren't date-locked.
     """
     s = tpl.strip()
     s = _TS_FULL.sub("<*>", s)
@@ -29,10 +27,12 @@ def _normalize_template(tpl: str) -> str:
     return s
 
 
-def _compile_template_regex(template: str) -> Tuple[re.Pattern, int]:
+def _compile_template_regex(template: str) -> Tuple[re.Pattern, int, str]:
     """
-    Compile a template string into a regex that captures wildcards.
-    Wildcards: "<*>" or "[*]" → each becomes a captured group (.*?)
+    Compile template to regex that captures wildcards.
+    Returns:
+      (regex, wildcard_count, anchor_literal)
+    Anchor literal is the longest literal segment used to skip most regex checks fast.
     """
     t = _normalize_template(template)
 
@@ -40,6 +40,7 @@ def _compile_template_regex(template: str) -> Tuple[re.Pattern, int]:
     out = ["^"]
     wildcards = 0
 
+    anchor = ""
     for p in parts:
         if not p:
             continue
@@ -48,27 +49,28 @@ def _compile_template_regex(template: str) -> Tuple[re.Pattern, int]:
             wildcards += 1
         else:
             out.append(re.escape(p))
+            lit = p.strip()
+            if len(lit) > len(anchor):
+                anchor = lit
 
     out.append("$")
     rx = re.compile("".join(out))
-    return rx, wildcards
+    return rx, wildcards, anchor
 
 
 @dataclass
 class HDFSTemplateBank:
     """
-    Template bank built from LogHub-style CSV:
+    Template bank built from LogHub CSV:
       EventId,EventTemplate
     """
-    compiled: List[Tuple[int, re.Pattern, int, str]]  # (event_id, regex, wildcard_count, raw_template)
+    compiled: List[Tuple[int, re.Pattern, int, str, str]]
+    # tuple = (event_id_int, regex, wildcard_count, raw_template, anchor)
 
     @classmethod
     def from_csv(cls, csv_path: str | Path) -> "HDFSTemplateBank":
-        """
-        ✅ Keep this name because your CLI calls .from_csv(...)
-        """
         path = Path(csv_path)
-        compiled: List[Tuple[int, re.Pattern, int, str]] = []
+        compiled: List[Tuple[int, re.Pattern, int, str, str]] = []
 
         with path.open("r", encoding="utf-8", errors="ignore", newline="") as f:
             reader = csv.DictReader(f)
@@ -78,14 +80,14 @@ class HDFSTemplateBank:
                 if not eid_s or not tpl:
                     continue
 
-                # EventId looks like "E000123" → int 123
+                # EventId looks like "E000123" -> int 123
                 try:
                     eid = int(eid_s[1:])
                 except Exception:
                     continue
 
-                rx, wc = _compile_template_regex(tpl)
-                compiled.append((eid, rx, wc, tpl))
+                rx, wc, anchor = _compile_template_regex(tpl)
+                compiled.append((eid, rx, wc, tpl, anchor))
 
         # Prefer more specific templates first (fewer wildcards)
         compiled.sort(key=lambda x: x[2])
@@ -97,11 +99,9 @@ def parse_hdfs_lines(
     bank: HDFSTemplateBank,
 ) -> Tuple[List[Tuple[int, List[str]]], List[str]]:
     """
-    Parse log lines into:
-      events: [(event_id_int, params_list)]
+    Returns:
+      events: [(event_id_int, params)]
       unknown_lines: [raw_line]
-
-    Params are extracted from wildcard capture groups.
     """
     events: List[Tuple[int, List[str]]] = []
     unknown_lines: List[str] = []
@@ -110,7 +110,11 @@ def parse_hdfs_lines(
         s = ln.rstrip("\n")
         matched = False
 
-        for eid, rx, _wc, _tpl in bank.compiled:
+        for eid, rx, _wc, _tpl, anchor in bank.compiled:
+            # ✅ fast prefilter
+            if anchor and anchor not in s:
+                continue
+
             m = rx.match(s)
             if m:
                 params = list(m.groups()) if m.groups() else []

@@ -568,3 +568,69 @@ def decode_template_rows_v1_mask_full(blob: bytes) -> List[str]:
             ei += 1
 
     return out_lines
+
+
+# ============================================================
+# SAFETY OVERRIDES (prevent bad INT classification crashes)
+# ============================================================
+
+import re as _re_safe
+
+_INT_RE_SAFE = _re_safe.compile(r"^-?\d+$")
+
+
+def _all_int_safe(vals: list[str]) -> bool:
+    if not vals:
+        return False
+    for v in vals:
+        s = (v or "").strip()
+        if not _INT_RE_SAFE.match(s):
+            return False
+    return True
+
+
+def _choose_type(values_nonempty, dict_threshold: int = 12):
+    """
+    Safer type chooser:
+    - INT only if ALL values are valid ints
+    - otherwise prefer DICT if repeated, else RAW
+    """
+    # Values are strings
+    if not values_nonempty:
+        return 5  # RAW
+
+    # ✅ safe INT detection
+    if _all_int_safe(values_nonempty):
+        return 1  # INT
+
+    # Keep existing HEX/IP checks if present in file (we don't force them here)
+    # But we use DICT when repetition exists
+    uniq = set(values_nonempty)
+    if len(values_nonempty) >= dict_threshold and len(uniq) <= max(2, len(values_nonempty) // 4):
+        return 4  # DICT
+
+    return 5  # RAW
+
+
+def _encode_int_nonempty(values):
+    """
+    Safe INT encoder:
+    If any value is not int-like, fall back to RAW encoding.
+    """
+    if not _all_int_safe(values):
+        # fallback to RAW
+        return _encode_raw_nonempty(values)
+
+    # original behavior (delta encode ints)
+    ints = [int(v.strip()) for v in values]
+    out = bytearray()
+    out += _uvarint_encode(len(ints))
+    if not ints:
+        return bytes(out)
+
+    out += _svarint_encode(ints[0])
+    prev = ints[0]
+    for x in ints[1:]:
+        out += _svarint_encode(x - prev)
+        prev = x
+    return bytes(out)

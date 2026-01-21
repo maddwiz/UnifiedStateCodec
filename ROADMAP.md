@@ -1,45 +1,32 @@
-# ROADMAP — Unified State Codec (USC)
+# USC Roadmap
 
-## Goal
-Build a domain-aware compression system for AI agent logs + structured traces that:
-1) Beats general compressors (gzip/zstd) in ratio for structured data
-2) Supports queryable compressed memory (FAST recall + fallback)
-3) Supports archive mode (max compression)
+## Current Status (Baseline)
+- USC-cold beats zstd-19 on multiple LogHub datasets
+- HOT/HOT-LITE provide query framing but currently labeled INDEX-ONLY in suite output
 
----
+## Milestone 1 — Make HOT/HOT-LITE fully lossless (H1M2 Row Mask)
+Goal: searchable + lossless + compressive across mixed unknown/event rows.
 
-## Phase 0 (Done ✅)
-- PF1: template/event recall index
-- PFQ1: token bloom index fallback search
-- COLD: TPLv1M bundle archive mode (~55x on HDFS 200k)
-- CLI:
-  - encode: hot / hot-lite / hot-lazy / cold
-  - query: FAST-first, optional upgrade to PFQ1
-  - bench: scoreboard table vs gzip/zstd
+Tasks:
+- Implement H1M2 row mask codec in encoder/decoder pipeline
+- Add decode/roundtrip verifier to benchmark suite
+- Remove INDEX-ONLY label once verified
 
----
+## Milestone 2 — Full competitor bakeoff
+Add baselines:
+- CLP (y-scope)
+- Logzip / LogShrink (if runnable)
+- zstd w/ dictionary training
 
-## Phase 1 (Next)
-- Prove PFQ1 catches queries FAST misses (value-only tokens)
-- Add "upgrade cache" so PFQ1 build uses pre-parsed events (avoid reread/parse)
-- Add real log datasets beyond HDFS:
-  - Open-source agent traces
-  - Tool-call logs (JSON)
-- Add packaging:
-  - pip installable CLI
-  - versioned releases
-  - minimal examples folder
+Deliverables:
+- README table with ratios + encode time + query time
 
----
+## Milestone 3 — Production polish
+- Stable CLI
+- PyPI package
+- Better docs + examples
+- Optional Rust hotpath rewrite
 
-## Phase 2 (Product-level)
-- Persistent global dictionaries across files (stream compression)
-- Drain3 template miner integration for unknown log formats
-- Selective decode indexing (query returns offsets without full decode)
-- Optional lossy memory modes (utility-based gisting)
-
----
-
-## Phase 3 (Publish / traction)
-- Public benchmarks: datasets, scripts, reproducible results
-- Blog + arXiv-style writeup with plots and ablations
+## Milestone 4 — Agent memory integration
+- USC-backed memory store adapter for agent frameworks
+- Query by entity/tool/error/time ranges

@@ -1,10 +1,9 @@
-# CHANGES — Unified State Codec (USC)
+# USC Changes Log
 
-## 2026-01-21 — Milestone: HOT-LAZY shipped ✅
-- Added HOT-LITE mode (PF1-only) for fast build + ~22x compression.
-- Added BENCH scoreboard (gzip/zstd vs USC hot/cold).
-- Added HOT-LAZY mode: encode PF1-only, then upgrade to PFQ1 fallback on-demand during query.
-- Verified:
-  - HOT-LITE: ~22.65x, FAST query ~86ms
-  - COLD: ~55.64x on HDFS 200k lines
-  - PFQ1 builds once (~11s) then persists in same .usch file
+## 2026-01-21
+- Added LogHub 200k baseline results (results/bench_loghub_all.json)
+- USC-cold dominates zstd-19 on multiple datasets:
+  - BGL ~83×, Zookeeper ~81×, HDFS ~56×, Apache ~35×, Android ~21×
+- Fixed LogHub template wildcard parsing `<*>` so params are preserved (lossless)
+- Restored strong typed slot selection (INT/IP/HEX/DICT/RAW) with safe INT fallback
+- README created with quickstart + benchmark table + roadmap

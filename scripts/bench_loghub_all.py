@@ -26,10 +26,13 @@ DATA = ROOT / "data" / "loghub"
 PRE = DATA / "preprocessed"
 RESULTS = ROOT / "results"
 
-PY = sys.executable  # always use the active interpreter
-
+PY = sys.executable
 
 USC_MODES = ["stream", "hot-lite", "hot", "cold"]
+
+# ✅ HOT-LITE/HOT currently act like index/skeleton on some datasets
+# until PF1 params are implemented for them.
+INDEX_ONLY_MODES = {"hot-lite", "hot"}
 
 
 def _read_lines_bytes(log_path: Path, max_lines: int) -> bytes:
@@ -82,10 +85,6 @@ def _bench_brotli(raw: bytes, quality: int = 11) -> Tuple[int, float]:
 
 
 def _ensure_templates(log_path: Path, lines: int) -> Path:
-    """
-    Create templates CSV once per dataset using our miner.
-    Output goes to data/loghub/preprocessed/<name>.log_templates.csv
-    """
     PRE.mkdir(parents=True, exist_ok=True)
     out_csv = PRE / f"{log_path.name}_templates.csv"
     if out_csv.exists():
@@ -122,7 +121,6 @@ def _run_usc_mode(log_path: Path, mode: str, lines: int, tpl_path: Path | None) 
         "--out", str(out_bin),
     ]
 
-    # ✅ stream does not need templates
     if mode != "stream" and tpl_path is not None:
         cmd += ["--tpl", str(tpl_path)]
 
@@ -139,14 +137,11 @@ def _run_usc_mode(log_path: Path, mode: str, lines: int, tpl_path: Path | None) 
 def main():
     import argparse
 
-    ap = argparse.ArgumentParser(description="Bench ALL LogHub logs vs baselines + USC modes (with templates via --tpl)")
+    ap = argparse.ArgumentParser(description="Bench ALL LogHub logs vs baselines + USC modes")
     ap.add_argument("--lines", type=int, default=int(os.environ.get("USC_SUITE_LINES", "200000")))
     args = ap.parse_args()
 
     lines = int(args.lines)
-
-    if not DATA.exists():
-        raise SystemExit(f"Missing data folder: {DATA}")
 
     logs = sorted([p for p in DATA.glob("*.log") if p.is_file()])
     if not logs:
@@ -163,7 +158,6 @@ def main():
         raw_n = len(raw)
         print(f"raw={_pretty(raw_n)}")
 
-        # ✅ mine templates ONCE per dataset, then pass via --tpl
         tpl_csv = _ensure_templates(log_path, lines)
 
         results[log_path.stem] = {}
@@ -187,8 +181,20 @@ def main():
         for mode in USC_MODES:
             try:
                 n, ms = _run_usc_mode(log_path, mode, lines, tpl_csv)
-                results[log_path.stem][f"USC-{mode}"] = {"bytes": n, "ratio": _ratio(raw_n, n), "ms": ms}
-                print(f"USC-{mode:<8} {_pretty(n):>10}  ratio {_ratio(raw_n,n):7.2f}x  {ms:8.1f} ms")
+
+                if mode in INDEX_ONLY_MODES:
+                    # ✅ we still log bytes+ms, but don't pretend it's lossless compression
+                    results[log_path.stem][f"USC-{mode}"] = {
+                        "bytes": n,
+                        "ratio": _ratio(raw_n, n),
+                        "ms": ms,
+                        "note": "INDEX_ONLY_UNTIL_PF1_PARAMS",
+                    }
+                    print(f"USC-{mode:<8} {_pretty(n):>10}  (INDEX-ONLY)  {ms:8.1f} ms")
+                else:
+                    results[log_path.stem][f"USC-{mode}"] = {"bytes": n, "ratio": _ratio(raw_n, n), "ms": ms}
+                    print(f"USC-{mode:<8} {_pretty(n):>10}  ratio {_ratio(raw_n,n):7.2f}x  {ms:8.1f} ms")
+
             except subprocess.CalledProcessError:
                 results[log_path.stem][f"USC-{mode}"] = {"bytes": 0, "ratio": 0.0, "ms": 0.0, "error": 1}
                 print(f"USC-{mode:<8} ERROR")

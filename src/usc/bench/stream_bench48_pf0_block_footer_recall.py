@@ -19,11 +19,11 @@ def run():
     prefix_len = 5
     group_size = 2
 
-    kwi = build_keyword_index(packets, m_bits=1024, k_hashes=4, prefix_len=prefix_len)
+    # ✅ stronger packet blooms -> stronger block blooms
+    kwi = build_keyword_index(packets, m_bits=2048, k_hashes=4, prefix_len=prefix_len)
 
     pf0_blob, pf0_meta = pf0_encode_packets(packets, group_size=group_size, zstd_level=10)
 
-    # Build block blooms from packet blooms
     bbi = build_block_bloom_index(kwi.packet_blooms, kwi.m_bits, kwi.k_hashes, group_size=group_size)
 
     footer = PF0BlockBloomFooter(
@@ -31,7 +31,7 @@ def run():
         k_hashes=kwi.k_hashes,
         prefix_len=prefix_len,
         group_size=group_size,
-        block_count=len(bbi.block_blooms),     # ✅ FIX
+        block_count=len(bbi.block_blooms),
         block_blooms=bbi.block_blooms,
     )
 

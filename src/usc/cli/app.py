@@ -18,6 +18,8 @@ from usc.mem.tpl_fast_query_v1 import query_fast_pf1
 from usc.mem.tpl_query_router_v1 import query_router_v1
 from usc.api.hdfs_template_codec_v1m_bundle import bundle_encode_and_compress_v1m
 
+from usc.api.stream_codec_v3d_auto import encode_stream_auto
+
 
 MAGIC_HOT = b"USCH"   # PF1 + optional PFQ1 container
 MAGIC_COLD = b"USCC"  # TPLv1M bundle container
@@ -102,9 +104,6 @@ def hot_unpack(blob: bytes) -> Tuple[bytes, bytes]:
 
 
 def hot_upgrade_file_in_place(hot_path: str, pf1_blob: bytes, pfq1_blob: bytes) -> None:
-    """
-    Overwrite the same .usch file with PFQ1 filled in (HOT-LAZY upgrade).
-    """
     upgraded = hot_pack(pf1_blob, pfq1_blob)
     with open(hot_path, "wb") as f:
         f.write(upgraded)
@@ -125,21 +124,6 @@ def cold_pack(bundle_blob: bytes) -> bytes:
     return MAGIC_COLD + _u32(VERSION) + _u32(len(bundle_blob)) + bundle_blob
 
 
-def cold_unpack(blob: bytes) -> bytes:
-    if len(blob) < 12:
-        raise ValueError("bad USCC blob (too small)")
-    if blob[:4] != MAGIC_COLD:
-        raise ValueError("not a USCC blob")
-
-    off = 4
-    ver, off = _u32_read(blob, off)
-    if ver != VERSION:
-        raise ValueError(f"unsupported USCC version: {ver}")
-
-    blen, off = _u32_read(blob, off)
-    return blob[off:off + blen]
-
-
 # ==========================
 # Baselines
 # ==========================
@@ -155,7 +139,7 @@ def baseline_zstd(raw_bytes: bytes, level: int = 10) -> bytes:
 
 
 # ==========================
-# Helpers: build PFQ1 from raw log (used by HOT-LAZY upgrade)
+# HOT-LAZY PFQ1 builder helper
 # ==========================
 
 def build_pfq1_from_log(log_path: str, tpl_path: str, lines: int, packet_events: int, zstd_level: int) -> bytes:
@@ -184,13 +168,10 @@ def cmd_encode(args: argparse.Namespace) -> None:
 
     if not os.path.exists(log_path):
         raise SystemExit(f"❌ log file not found: {log_path}")
-    if not os.path.exists(tpl_path):
-        raise SystemExit(f"❌ template CSV not found: {tpl_path}")
 
     print("USC ENCODE")
     print(f"mode:   {mode}")
     print(f"log:    {log_path}")
-    print(f"tpl:    {tpl_path}")
     print(f"lines:  {lines}")
     print(f"out:    {out_path}")
     print("-" * 60)
@@ -199,12 +180,36 @@ def cmd_encode(args: argparse.Namespace) -> None:
     raw_text = "\n".join(raw_lines) + "\n"
     raw_bytes = raw_text.encode("utf-8", errors="replace")
 
+    # STREAM: Drain3 + persistent dictionaries (v3d9 engine)
+    if mode == "stream":
+        t0 = time.perf_counter()
+        stream_blob = encode_stream_auto(
+            raw_lines,
+            chunk_lines=args.chunk_lines,
+            zstd_level=args.zstd,
+        )
+        dt = (time.perf_counter() - t0) * 1000.0
+
+        with open(out_path, "wb") as f:
+            f.write(stream_blob)
+
+        print(f"RAW:      {_pretty(len(raw_bytes))}")
+        print(f"STREAM:   {_pretty(len(stream_blob))}   build={dt:.2f} ms")
+        print(f"ratio:    {_ratio(len(raw_bytes), len(stream_blob)):.2f}x")
+        print("-" * 60)
+        print("DONE ✅")
+        return
+
+    # Everything below needs templates
+    if mode != "stream":
+        if not os.path.exists(tpl_path):
+            raise SystemExit(f"❌ template CSV not found: {tpl_path}")
+
     bank = HDFSTemplateBank.from_csv(tpl_path)
     events, unknown = parse_hdfs_lines(raw_lines, bank)
     tpl_text = open(tpl_path, "r", errors="replace").read()
 
     if mode == "hot":
-        # PF1 + PFQ1 now (universal query)
         t0 = time.perf_counter()
         pf1_blob, _pf1_meta = build_pf1(events, unknown, tpl_text, packet_events=args.packet_events, zstd_level=args.zstd)
         dt_pf1 = (time.perf_counter() - t0) * 1000.0
@@ -224,7 +229,6 @@ def cmd_encode(args: argparse.Namespace) -> None:
         print(f"ratio:   {_ratio(len(raw_bytes), len(hot_blob)):.2f}x")
 
     elif mode == "hot-lite":
-        # PF1 only (FAST queries, no PFQ1 fallback)
         t0 = time.perf_counter()
         pf1_blob, _pf1_meta = build_pf1(events, unknown, tpl_text, packet_events=args.packet_events, zstd_level=args.zstd)
         dt_pf1 = (time.perf_counter() - t0) * 1000.0
@@ -239,7 +243,6 @@ def cmd_encode(args: argparse.Namespace) -> None:
         print(f"ratio:   {_ratio(len(raw_bytes), len(hot_blob)):.2f}x")
 
     elif mode == "hot-lazy":
-        # PF1 only now, PFQ1 built later if needed (auto-upgrade on query)
         t0 = time.perf_counter()
         pf1_blob, _pf1_meta = build_pf1(events, unknown, tpl_text, packet_events=args.packet_events, zstd_level=args.zstd)
         dt_pf1 = (time.perf_counter() - t0) * 1000.0
@@ -252,14 +255,8 @@ def cmd_encode(args: argparse.Namespace) -> None:
         print(f"PF1:     {_pretty(len(pf1_blob))}   build={dt_pf1:.2f} ms")
         print(f"USCH:    {_pretty(len(hot_blob))}   saved ✅ (HOT-LAZY)")
         print(f"ratio:   {_ratio(len(raw_bytes), len(hot_blob)):.2f}x")
-        print("-" * 60)
-        print("HOT-LAZY NOTE:")
-        print(" - FAST queries work immediately.")
-        print(" - If a query has 0 hits, you can auto-upgrade this file with PFQ1 fallback using:")
-        print("   python -m usc query --hot <file.usch> --q \"...\" --upgrade --log <log> --tpl <tpl>")
 
     elif mode == "cold":
-        # Max compression bundle archive
         t0 = time.perf_counter()
         bundle_blob, _meta = bundle_encode_and_compress_v1m(
             events=events,
@@ -279,7 +276,7 @@ def cmd_encode(args: argparse.Namespace) -> None:
         print(f"ratio:   {_ratio(len(raw_bytes), len(cold_blob)):.2f}x")
 
     else:
-        raise SystemExit("❌ mode must be: hot | hot-lite | hot-lazy | cold")
+        raise SystemExit("❌ mode must be: hot | hot-lite | hot-lazy | cold | stream")
 
     print("-" * 60)
     print("DONE ✅")
@@ -302,9 +299,9 @@ def cmd_query(args: argparse.Namespace) -> None:
     print(f"limit: {limit}")
     print("-" * 60)
 
-    # First: FAST attempt always
+    # FAST attempt always
     t0 = time.perf_counter()
-    hits_fast, cands = query_fast_pf1(pf1_blob, q, limit=limit)
+    hits_fast, _cands = query_fast_pf1(pf1_blob, q, limit=limit)
     dt_fast = (time.perf_counter() - t0) * 1000.0
 
     if hits_fast:
@@ -331,7 +328,6 @@ def cmd_query(args: argparse.Namespace) -> None:
             print("DONE ✅")
             return
 
-        # Upgrade requested
         if args.log is None or args.tpl is None:
             raise SystemExit("❌ upgrade requires --log and --tpl")
 
@@ -351,7 +347,6 @@ def cmd_query(args: argparse.Namespace) -> None:
         print("Re-running query with router (FAST → PFQ1 fallback)...")
         print("-" * 60)
 
-        # Router query after upgrade
         t2 = time.perf_counter()
         hits2, mode2 = query_router_v1(pf1_blob, pfq1_new, q, limit=limit)
         dt2 = (time.perf_counter() - t2) * 1000.0
@@ -366,7 +361,7 @@ def cmd_query(args: argparse.Namespace) -> None:
         print("DONE ✅")
         return
 
-    # Full HOT path: router FAST → PFQ1 fallback
+    # Full HOT path
     t0 = time.perf_counter()
     hits, mode = query_router_v1(pf1_blob, pfq1_blob, q, limit=limit)
     dt = (time.perf_counter() - t0) * 1000.0
@@ -419,29 +414,33 @@ def cmd_bench(args: argparse.Namespace) -> None:
 
     rows: List[Dict[str, object]] = []
 
-    # gzip baseline
+    # gzip
     t0 = time.perf_counter()
     gz = baseline_gzip(raw_bytes, level=args.gzip)
     t_gz = (time.perf_counter() - t0) * 1000.0
     rows.append(_row(f"gzip-{args.gzip}", len(gz), raw_n, t_gz))
 
-    # zstd baseline
+    # zstd
     if zstd is not None:
         t0 = time.perf_counter()
         zs = baseline_zstd(raw_bytes, level=args.zstd)
         t_zs = (time.perf_counter() - t0) * 1000.0
         rows.append(_row(f"zstd-{args.zstd}", len(zs), raw_n, t_zs))
-    else:
-        rows.append({"name": f"zstd-{args.zstd}", "bytes": None, "pretty": "N/A", "ratio": None, "ms": None})
 
-    # USC HOT-LITE (PF1 only)
+    # STREAM
+    t0 = time.perf_counter()
+    stream_blob = encode_stream_auto(raw_lines, chunk_lines=args.chunk_lines, zstd_level=args.zstd)
+    t_stream = (time.perf_counter() - t0) * 1000.0
+    rows.append(_row("USC-STREAM (v3d9)", len(stream_blob), raw_n, t_stream))
+
+    # HOT-LITE
     t0 = time.perf_counter()
     pf1_blob, _m1 = build_pf1(events, unknown, tpl_text, packet_events=args.packet_events, zstd_level=args.zstd)
     t_pf1 = (time.perf_counter() - t0) * 1000.0
     usch_lite = hot_pack(pf1_blob, b"")
     rows.append(_row("USC-HOT-LITE (PF1)", len(usch_lite), raw_n, t_pf1))
 
-    # USC HOT (PF1 + PFQ1)
+    # HOT
     t0 = time.perf_counter()
     pf1_blob2, _m2 = build_pf1(events, unknown, tpl_text, packet_events=args.packet_events, zstd_level=args.zstd)
     t_pf1b = (time.perf_counter() - t0) * 1000.0
@@ -453,7 +452,7 @@ def cmd_bench(args: argparse.Namespace) -> None:
     usch = hot_pack(pf1_blob2, pfq1_blob)
     rows.append(_row("USC-HOT (USCH)", len(usch), raw_n, t_pf1b + t_pfq1))
 
-    # USC COLD (USCC)
+    # COLD
     t0 = time.perf_counter()
     bundle_blob, _meta = bundle_encode_and_compress_v1m(
         events=events,
@@ -462,24 +461,16 @@ def cmd_bench(args: argparse.Namespace) -> None:
         zstd_level=args.zstd,
     )
     t_cold = (time.perf_counter() - t0) * 1000.0
-
     uscc = cold_pack(bundle_blob)
     rows.append(_row("USC-COLD (USCC)", len(uscc), raw_n, t_cold))
 
-    rows_sorted = sorted([r for r in rows if r.get("bytes") is not None], key=lambda x: x["bytes"])
+    rows_sorted = sorted(rows, key=lambda x: x["bytes"])
 
     print(f"{'METHOD':24} {'SIZE':12} {'RATIO':10} {'BUILD(ms)':10}")
     print("-" * 72)
     for r in rows_sorted:
         print(f"{r['name'][:24]:24} {r['pretty']:12} {r['ratio']:>9.2f}x {r['ms']:>10.2f}")
 
-    print("-" * 72)
-    print("NOTES:")
-    print(" - HOT-LITE stores PF1 only (FAST queries, no PFQ1 fallback).")
-    print(" - HOT-LAZY stores PF1 now; PFQ1 can be added later on-demand (upgrade during query).")
-    print(" - HOT stores PF1 + PFQ1 (FAST + universal fallback).")
-    print(" - COLD stores max-compression bundle archive.")
-    print(" - gzip/zstd are general compressors (not queryable).")
     print("-" * 72)
 
     if args.out_json:
@@ -490,6 +481,7 @@ def cmd_bench(args: argparse.Namespace) -> None:
             "lines": len(raw_lines),
             "raw_bytes": raw_n,
             "packet_events": args.packet_events,
+            "chunk_lines": args.chunk_lines,
             "gzip_level": args.gzip,
             "zstd_level": args.zstd,
             "results": rows_sorted,
@@ -502,17 +494,18 @@ def cmd_bench(args: argparse.Namespace) -> None:
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="usc",
-        description="Unified State Codec (USC) — Hot/Cool compression + query",
+        description="Unified State Codec (USC) — Hot/Cool/Stream compression + query",
     )
     sub = p.add_subparsers(dest="cmd", required=True)
 
-    enc = sub.add_parser("encode", help="Encode a log into HOT/HOT-LITE/HOT-LAZY (queryable) or COLD (max ratio)")
-    enc.add_argument("--mode", choices=["hot", "hot-lite", "hot-lazy", "cold"], required=True)
+    enc = sub.add_parser("encode", help="Encode a log into HOT/HOT-LITE/HOT-LAZY/COLD/STREAM")
+    enc.add_argument("--mode", choices=["hot", "hot-lite", "hot-lazy", "cold", "stream"], required=True)
     enc.add_argument("--log", default="data/loghub/HDFS.log")
     enc.add_argument("--tpl", default="data/loghub/preprocessed/HDFS.log_templates.csv")
     enc.add_argument("--out", required=True)
     enc.add_argument("--lines", type=int, default=200000)
     enc.add_argument("--packet_events", type=int, default=32768)
+    enc.add_argument("--chunk_lines", type=int, default=25, help="STREAM only: chunk size in lines")
     enc.add_argument("--zstd", type=int, default=10)
     enc.set_defaults(func=cmd_encode)
 
@@ -520,14 +513,12 @@ def build_parser() -> argparse.ArgumentParser:
     qry.add_argument("--hot", required=True)
     qry.add_argument("--q", required=True)
     qry.add_argument("--limit", type=int, default=25)
-
-    # HOT-LAZY upgrade options
-    qry.add_argument("--upgrade", action="store_true", help="If FAST hits=0 and PFQ1 missing, build PFQ1 and upgrade file in-place")
-    qry.add_argument("--log", default=None, help="Required for --upgrade (raw log path)")
-    qry.add_argument("--tpl", default=None, help="Required for --upgrade (template CSV path)")
-    qry.add_argument("--lines", type=int, default=200000, help="Used for --upgrade PFQ1 build")
-    qry.add_argument("--packet_events", type=int, default=32768, help="Used for --upgrade PFQ1 build")
-    qry.add_argument("--zstd", type=int, default=10, help="Used for --upgrade PFQ1 build")
+    qry.add_argument("--upgrade", action="store_true")
+    qry.add_argument("--log", default=None)
+    qry.add_argument("--tpl", default=None)
+    qry.add_argument("--lines", type=int, default=200000)
+    qry.add_argument("--packet_events", type=int, default=32768)
+    qry.add_argument("--zstd", type=int, default=10)
     qry.set_defaults(func=cmd_query)
 
     b = sub.add_parser("bench", help="Run baselines + USC modes and print a scoreboard")
@@ -535,6 +526,7 @@ def build_parser() -> argparse.ArgumentParser:
     b.add_argument("--tpl", default="data/loghub/preprocessed/HDFS.log_templates.csv")
     b.add_argument("--lines", type=int, default=200000)
     b.add_argument("--packet_events", type=int, default=32768)
+    b.add_argument("--chunk_lines", type=int, default=25, help="STREAM only: chunk size in lines")
     b.add_argument("--gzip", type=int, default=9)
     b.add_argument("--zstd", type=int, default=10)
     b.add_argument("--out_json", default=None)

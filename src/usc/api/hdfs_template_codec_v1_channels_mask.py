@@ -307,3 +307,264 @@ def encode_and_compress_v1m(
         channel_count=max((len(p) for _, p in events), default=0),
     )
     return comp, meta
+
+
+# ============================================================
+# H1M2: ROW-PRESERVING TEMPLATE + RAW SPILL (LOSSLESS HOT-LITE)
+# ============================================================
+#
+# Fixes the core lossless issue:
+# - H1M1 can store events + unknowns but cannot reconstruct original row order.
+# - H1M2 stores a row bitmask so we can interleave events + unknown lines exactly.
+#
+# Row mask bit = 1 means RAW/UNKNOWN row; 0 means TEMPLATE/EVENT row.
+#
+# Header:
+#   magic 'H1M2'
+#   version u32 (1)
+#   row_count uvarint
+#   event_count uvarint
+#   unknown_count uvarint
+#   max_params uvarint
+#
+# Body:
+#   row_mask_len uvarint
+#   row_mask_bytes
+#   event_id stream (uvarint per EVENT row, in event-row order)
+#   channels (same as H1M1, built over EVENT rows only)
+#   unknown lines (len+utf8) in UNKNOWN-row order
+#
+# This makes HOT-LITE/HOT modes truly LOSSLESS.
+
+
+def encode_template_rows_v1_mask(
+    rows: List[Tuple[int, List[str]] | None],
+    unknown_lines: List[str],
+    dict_threshold: int = 12,
+    max_dict: int = 4096,
+) -> bytes:
+    """
+    rows:
+      list of length row_count
+      - if row is TEMPLATE/EVENT: rows[i] = (event_id, params)
+      - if row is RAW/UNKNOWN: rows[i] = None
+    unknown_lines:
+      raw lines in the same order as the None rows appear
+
+    Returns H1M2 bytes (lossless).
+    """
+    import struct
+
+    row_count = len(rows)
+
+    # build row mask + extract event rows in order
+    mask_len = (row_count + 7) // 8
+    row_mask = bytearray(mask_len)
+
+    events: List[Tuple[int, List[str]]] = []
+    unk_seen = 0
+
+    for i, r in enumerate(rows):
+        if r is None:
+            row_mask[i // 8] |= (1 << (i % 8))
+            unk_seen += 1
+        else:
+            events.append((int(r[0]), r[1]))
+
+    if unk_seen != len(unknown_lines):
+        raise ValueError(f"H1M2: unknown_lines mismatch: mask says {unk_seen} but unknown_lines has {len(unknown_lines)}")
+
+    # compute max_params over event rows only
+    max_params = 0
+    for _, p in events:
+        if len(p) > max_params:
+            max_params = len(p)
+
+    out = bytearray()
+    out += b"H1M2"
+    out += struct.pack("<I", 1)
+
+    out += _uvarint_encode(row_count)
+    out += _uvarint_encode(len(events))
+    out += _uvarint_encode(len(unknown_lines))
+    out += _uvarint_encode(max_params)
+
+    # row mask
+    out += _uvarint_encode(len(row_mask))
+    out += bytes(row_mask)
+
+    # event_id stream (ONLY for event rows)
+    for eid, _ in events:
+        out += _uvarint_encode(int(eid))
+
+    # build event param channels (same as H1M1)
+    channels: List[List[str]] = [[] for _ in range(max_params)]
+    for _, params in events:
+        for i in range(max_params):
+            channels[i].append(params[i] if i < len(params) else "")
+
+    # encode each channel as: mask + type + payload
+    for ch in channels:
+        mask_bytes, nonempty = _build_nonempty_mask(ch)
+        out += _uvarint_encode(len(mask_bytes))
+        out += mask_bytes
+
+        t = _choose_type(nonempty, dict_threshold=dict_threshold)
+        out += _uvarint_encode(t)
+
+        payload = _encode_by_type(nonempty, t, max_dict=max_dict)
+        out += _uvarint_encode(len(payload))
+        out += payload
+
+    # unknown raw lines (ONLY for unknown rows)
+    for s in unknown_lines:
+        out += _encode_str(s)
+
+    return bytes(out)
+
+
+def _mask_bit(mask: bytes, i: int) -> int:
+    return (mask[i // 8] >> (i % 8)) & 1
+
+
+def decode_template_rows_v1_mask_full(blob: bytes) -> List[str]:
+    """
+    Full lossless decode for H1M2 -> list of reconstructed lines (strings).
+
+    NOTE:
+    This only reconstructs row structure:
+    - TEMPLATE rows become a synthetic placeholder line:
+        "<EID=<id>> <P0=...> <P1=...> ..."
+      because true template->string reconstruction requires the template text.
+    If you already rebuild original lines elsewhere (tpl_pf1_recall), use that path.
+
+    This function exists mainly for correctness checks + future decode wiring.
+    """
+    import struct
+
+    if not blob.startswith(b"H1M2"):
+        raise ValueError("not H1M2")
+
+    i = 4
+    _ver = struct.unpack("<I", blob[i:i+4])[0]
+    i += 4
+
+    row_count, i = _uvarint_decode(blob, i)
+    event_count, i = _uvarint_decode(blob, i)
+    unknown_count, i = _uvarint_decode(blob, i)
+    max_params, i = _uvarint_decode(blob, i)
+
+    mask_len, i = _uvarint_decode(blob, i)
+    row_mask = blob[i:i+mask_len]
+    i += mask_len
+
+    # read event ids
+    eids: List[int] = []
+    for _ in range(event_count):
+        eid, i = _uvarint_decode(blob, i)
+        eids.append(int(eid))
+
+    # decode channels into event param rows
+    cols: List[List[str]] = [[] for _ in range(max_params)]
+    for ch_i in range(max_params):
+        mlen, i = _uvarint_decode(blob, i)
+        ch_mask = blob[i:i+mlen]
+        i += mlen
+
+        t, i = _uvarint_decode(blob, i)
+        plen, i = _uvarint_decode(blob, i)
+        payload = blob[i:i+plen]
+        i += plen
+
+        # decode nonempty list based on type
+        # we reuse existing decode helpers by temporarily decoding the typed payload
+        # the payload format for each type starts with count = number of NONEMPTY items
+        j = 0
+        n_nonempty, j = _uvarint_decode(payload, j)
+
+        nonempty_values: List[str] = []
+        if t == 1:
+            # int
+            if n_nonempty == 0:
+                nonempty_values = []
+            else:
+                x0, j = _svarint_decode(payload, j)
+                ints = [x0]
+                prev = x0
+                for _ in range(n_nonempty - 1):
+                    d, j = _svarint_decode(payload, j)
+                    ints.append(prev + d)
+                    prev = prev + d
+                nonempty_values = [str(x) for x in ints]
+
+        elif t == 2:
+            # hex stored as bytes blocks
+            for _ in range(n_nonempty):
+                b, j = _decode_bytes(payload, j)
+                nonempty_values.append(b.hex())
+
+        elif t == 3:
+            # ip stored as 4 bytes
+            for _ in range(n_nonempty):
+                parts = payload[j:j+4]
+                j += 4
+                nonempty_values.append(".".join(str(int(x)) for x in parts))
+
+        elif t == 4:
+            # dict
+            vocab_n, j = _uvarint_decode(payload, j)
+            vocab: List[str] = []
+            for _ in range(vocab_n):
+                s, j = _decode_str(payload, j)
+                vocab.append(s)
+            for _ in range(n_nonempty):
+                did, j = _uvarint_decode(payload, j)
+                nonempty_values.append(vocab[int(did)] if int(did) < len(vocab) else "")
+
+        else:
+            # raw
+            for _ in range(n_nonempty):
+                s, j = _decode_str(payload, j)
+                nonempty_values.append(s)
+
+        # expand into full channel length event_count using channel mask
+        out_vals: List[str] = []
+        k = 0
+        for r in range(event_count):
+            if _mask_bit(ch_mask, r) == 1:
+                out_vals.append(nonempty_values[k] if k < len(nonempty_values) else "")
+                k += 1
+            else:
+                out_vals.append("")
+        cols[ch_i] = out_vals
+
+    # transpose event params
+    event_params: List[List[str]] = []
+    for r in range(event_count):
+        row = []
+        for c in range(max_params):
+            row.append(cols[c][r])
+        event_params.append(row)
+
+    # unknown lines
+    unknowns: List[str] = []
+    for _ in range(unknown_count):
+        s, i = _decode_str(blob, i)
+        unknowns.append(s)
+
+    # reconstruct row stream
+    out_lines: List[str] = []
+    ei = 0
+    ui = 0
+    for r in range(row_count):
+        if _mask_bit(row_mask, r) == 1:
+            out_lines.append(unknowns[ui])
+            ui += 1
+        else:
+            # placeholder if no template expansion exists here
+            eid = eids[ei]
+            params = event_params[ei]
+            out_lines.append(f"<EID={eid}> " + " ".join(params).strip())
+            ei += 1
+
+    return out_lines

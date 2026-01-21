@@ -1,8 +1,15 @@
 import argparse
+import gzip
+import json
 import os
 import struct
 import time
-from typing import List, Tuple
+from typing import Dict, List, Tuple
+
+try:
+    import zstandard as zstd
+except Exception:
+    zstd = None
 
 from usc.mem.hdfs_templates_v0 import HDFSTemplateBank, parse_hdfs_lines
 from usc.mem.tpl_pf1_recall_v1 import build_tpl_pf1_blob as build_pf1
@@ -35,6 +42,10 @@ def _pretty(n: int) -> str:
     return f"{n} B"
 
 
+def _ratio(raw: int, comp: int) -> float:
+    return raw / max(1, comp)
+
+
 def _u32(x: int) -> bytes:
     return struct.pack("<I", int(x))
 
@@ -42,7 +53,7 @@ def _u32(x: int) -> bytes:
 def _u32_read(b: bytes, off: int) -> Tuple[int, int]:
     if off + 4 > len(b):
         raise ValueError("u32 read overflow")
-    return struct.unpack("<I", b[off:off+4])[0], off + 4
+    return struct.unpack("<I", b[off:off + 4])[0], off + 4
 
 
 # ==========================
@@ -50,6 +61,15 @@ def _u32_read(b: bytes, off: int) -> Tuple[int, int]:
 # ==========================
 
 def hot_pack(pf1_blob: bytes, pfq1_blob: bytes) -> bytes:
+    """
+    USCH format:
+      MAGIC (4)
+      VERSION (u32)
+      pf1_len (u32)
+      pfq1_len (u32)
+      pf1_blob
+      pfq1_blob
+    """
     return (
         MAGIC_HOT
         + _u32(VERSION)
@@ -74,9 +94,9 @@ def hot_unpack(blob: bytes) -> Tuple[bytes, bytes]:
     pf1_len, off = _u32_read(blob, off)
     pfq1_len, off = _u32_read(blob, off)
 
-    pf1 = blob[off:off+pf1_len]
+    pf1 = blob[off:off + pf1_len]
     off += pf1_len
-    pfq1 = blob[off:off+pfq1_len]
+    pfq1 = blob[off:off + pfq1_len]
     return pf1, pfq1
 
 
@@ -85,6 +105,13 @@ def hot_unpack(blob: bytes) -> Tuple[bytes, bytes]:
 # ==========================
 
 def cold_pack(bundle_blob: bytes) -> bytes:
+    """
+    USCC format:
+      MAGIC (4)
+      VERSION (u32)
+      bundle_len (u32)
+      bundle_blob
+    """
     return MAGIC_COLD + _u32(VERSION) + _u32(len(bundle_blob)) + bundle_blob
 
 
@@ -100,7 +127,21 @@ def cold_unpack(blob: bytes) -> bytes:
         raise ValueError(f"unsupported USCC version: {ver}")
 
     blen, off = _u32_read(blob, off)
-    return blob[off:off+blen]
+    return blob[off:off + blen]
+
+
+# ==========================
+# Baselines
+# ==========================
+
+def baseline_gzip(raw_bytes: bytes, level: int = 9) -> bytes:
+    return gzip.compress(raw_bytes, compresslevel=int(level))
+
+
+def baseline_zstd(raw_bytes: bytes, level: int = 10) -> bytes:
+    if zstd is None:
+        raise RuntimeError("zstandard missing (pip install zstandard)")
+    return zstd.ZstdCompressor(level=int(level)).compress(raw_bytes)
 
 
 # ==========================
@@ -161,7 +202,7 @@ def cmd_encode(args: argparse.Namespace) -> None:
         print(f"PF1:     {_pretty(len(pf1_blob))}   build={dt_pf1:.2f} ms")
         print(f"PFQ1:    {_pretty(len(pfq1_blob))}   build={dt_pfq1:.2f} ms")
         print(f"USCH:    {_pretty(len(hot_blob))}   saved ✅")
-        print(f"ratio:   {(len(raw_bytes)/max(1,len(hot_blob))):.2f}x")
+        print(f"ratio:   {_ratio(len(raw_bytes), len(hot_blob)):.2f}x")
 
     elif mode == "cold":
         t0 = time.perf_counter()
@@ -180,7 +221,7 @@ def cmd_encode(args: argparse.Namespace) -> None:
         print(f"RAW:     {_pretty(len(raw_bytes))}")
         print(f"BUNDLE:  {_pretty(len(bundle_blob))}   build={dt:.2f} ms")
         print(f"USCC:    {_pretty(len(cold_blob))}   saved ✅")
-        print(f"ratio:   {(len(raw_bytes)/max(1,len(cold_blob))):.2f}x")
+        print(f"ratio:   {_ratio(len(raw_bytes), len(cold_blob)):.2f}x")
 
     else:
         raise SystemExit("❌ mode must be: hot | cold")
@@ -220,6 +261,119 @@ def cmd_query(args: argparse.Namespace) -> None:
     print("DONE ✅")
 
 
+def _row(name: str, size: int, raw: int, ms: float) -> Dict[str, object]:
+    return {
+        "name": name,
+        "bytes": int(size),
+        "pretty": _pretty(int(size)),
+        "ratio": float(_ratio(raw, size)),
+        "ms": float(ms),
+    }
+
+
+def cmd_bench(args: argparse.Namespace) -> None:
+    """
+    One command, one scoreboard.
+    """
+    log_path = args.log
+    tpl_path = args.tpl
+    lines = args.lines
+
+    if not os.path.exists(log_path):
+        raise SystemExit(f"❌ log file not found: {log_path}")
+    if not os.path.exists(tpl_path):
+        raise SystemExit(f"❌ template CSV not found: {tpl_path}")
+
+    raw_lines = _read_first_n_lines(log_path, lines)
+    raw_text = "\n".join(raw_lines) + "\n"
+    raw_bytes = raw_text.encode("utf-8", errors="replace")
+    raw_n = len(raw_bytes)
+
+    bank = HDFSTemplateBank.from_csv(tpl_path)
+    events, unknown = parse_hdfs_lines(raw_lines, bank)
+    tpl_text = open(tpl_path, "r", errors="replace").read()
+
+    print("USC BENCH — Scoreboard")
+    print(f"log:   {log_path}")
+    print(f"tpl:   {tpl_path}")
+    print(f"lines: {len(raw_lines)}")
+    print(f"RAW:   {_pretty(raw_n)}")
+    print("-" * 72)
+
+    rows: List[Dict[str, object]] = []
+
+    # --- gzip baseline
+    t0 = time.perf_counter()
+    gz = baseline_gzip(raw_bytes, level=args.gzip)
+    t_gz = (time.perf_counter() - t0) * 1000.0
+    rows.append(_row(f"gzip-{args.gzip}", len(gz), raw_n, t_gz))
+
+    # --- zstd baseline
+    if zstd is not None:
+        t0 = time.perf_counter()
+        zs = baseline_zstd(raw_bytes, level=args.zstd)
+        t_zs = (time.perf_counter() - t0) * 1000.0
+        rows.append(_row(f"zstd-{args.zstd}", len(zs), raw_n, t_zs))
+    else:
+        rows.append({"name": f"zstd-{args.zstd}", "bytes": None, "pretty": "N/A", "ratio": None, "ms": None})
+
+    # --- USC HOT (USCH)
+    t0 = time.perf_counter()
+    pf1_blob, _m1 = build_pf1(events, unknown, tpl_text, packet_events=args.packet_events, zstd_level=args.zstd)
+    t_pf1 = (time.perf_counter() - t0) * 1000.0
+
+    t0 = time.perf_counter()
+    pfq1_blob, _m2 = build_pfq1(events, unknown, tpl_text, packet_events=args.packet_events, zstd_level=args.zstd)
+    t_pfq1 = (time.perf_counter() - t0) * 1000.0
+
+    usch = hot_pack(pf1_blob, pfq1_blob)
+    rows.append(_row("USC-HOT (USCH)", len(usch), raw_n, t_pf1 + t_pfq1))
+
+    # --- USC COLD (USCC)
+    t0 = time.perf_counter()
+    bundle_blob, _meta = bundle_encode_and_compress_v1m(
+        events=events,
+        unknown_lines=unknown,
+        template_csv_text=tpl_text,
+        zstd_level=args.zstd,
+    )
+    t_cold = (time.perf_counter() - t0) * 1000.0
+
+    uscc = cold_pack(bundle_blob)
+    rows.append(_row("USC-COLD (USCC)", len(uscc), raw_n, t_cold))
+
+    # print table
+    rows_sorted = sorted([r for r in rows if r.get("bytes") is not None], key=lambda x: x["bytes"])  # smallest first
+
+    print(f"{'METHOD':24} {'SIZE':12} {'RATIO':10} {'BUILD(ms)':10}")
+    print("-" * 72)
+    for r in rows_sorted:
+        print(f"{r['name'][:24]:24} {r['pretty']:12} {r['ratio']:>9.2f}x {r['ms']:>10.2f}")
+
+    print("-" * 72)
+    print("NOTES:")
+    print(" - USC-HOT stores PF1 + PFQ1 (queryable + fallback).")
+    print(" - USC-COLD stores max-compression bundle archive.")
+    print(" - gzip/zstd are general compressors (not queryable).")
+    print("-" * 72)
+
+    if args.out_json:
+        payload = {
+            "ts": time.time(),
+            "log": log_path,
+            "tpl": tpl_path,
+            "lines": len(raw_lines),
+            "raw_bytes": raw_n,
+            "packet_events": args.packet_events,
+            "gzip_level": args.gzip,
+            "zstd_level": args.zstd,
+            "results": rows_sorted,
+        }
+        with open(args.out_json, "w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=2)
+        print(f"saved_json: {args.out_json} ✅")
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="usc",
@@ -242,6 +396,16 @@ def build_parser() -> argparse.ArgumentParser:
     qry.add_argument("--q", required=True)
     qry.add_argument("--limit", type=int, default=25)
     qry.set_defaults(func=cmd_query)
+
+    b = sub.add_parser("bench", help="Run baselines + USC modes and print a scoreboard")
+    b.add_argument("--log", default="data/loghub/HDFS.log")
+    b.add_argument("--tpl", default="data/loghub/preprocessed/HDFS.log_templates.csv")
+    b.add_argument("--lines", type=int, default=200000)
+    b.add_argument("--packet_events", type=int, default=32768)
+    b.add_argument("--gzip", type=int, default=9)
+    b.add_argument("--zstd", type=int, default=10)
+    b.add_argument("--out_json", default=None, help="Optional: save scoreboard to JSON file")
+    b.set_defaults(func=cmd_bench)
 
     return p
 

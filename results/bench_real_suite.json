@@ -1,0 +1,254 @@
+[
+  {
+    "dataset": "HDFS",
+    "method": "gzip",
+    "raw_bytes": 28008761,
+    "out_bytes": 2556699,
+    "ratio": 10.955048286873033,
+    "ms": 210.96205711364746,
+    "note": ""
+  },
+  {
+    "dataset": "HDFS",
+    "method": "zstd-19",
+    "raw_bytes": 28008761,
+    "out_bytes": 1668351,
+    "ratio": 16.78829035376848,
+    "ms": 7808.922529220581,
+    "note": ""
+  },
+  {
+    "dataset": "HDFS",
+    "method": "brotli-11",
+    "raw_bytes": 28008761,
+    "out_bytes": 1616280,
+    "ratio": 17.32915150840201,
+    "ms": 25727.59222984314,
+    "note": ""
+  },
+  {
+    "dataset": "HDFS",
+    "method": "USC-STREAM",
+    "raw_bytes": 28008761,
+    "out_bytes": 3228612,
+    "ratio": 8.675170940329776,
+    "ms": 5009.81330871582,
+    "note": ""
+  },
+  {
+    "dataset": "HDFS",
+    "method": "USC-HOT-LITE",
+    "raw_bytes": 28008761,
+    "out_bytes": 1236655,
+    "ratio": 22.64880746853407,
+    "ms": 4152.387857437134,
+    "note": ""
+  },
+  {
+    "dataset": "HDFS",
+    "method": "USC-HOT",
+    "raw_bytes": 28008761,
+    "out_bytes": 2480484,
+    "ratio": 11.291651548649376,
+    "ms": 11640.520095825195,
+    "note": ""
+  },
+  {
+    "dataset": "HDFS",
+    "method": "USC-COLD",
+    "raw_bytes": 28008761,
+    "out_bytes": 503394,
+    "ratio": 55.63983877439938,
+    "ms": 3948.350667953491,
+    "note": ""
+  },
+  {
+    "dataset": "BGL",
+    "method": "gzip",
+    "raw_bytes": 26817462,
+    "out_bytes": 2729007,
+    "ratio": 9.826820524828262,
+    "ms": 266.7117118835449,
+    "note": ""
+  },
+  {
+    "dataset": "BGL",
+    "method": "zstd-19",
+    "raw_bytes": 26817462,
+    "out_bytes": 1428282,
+    "ratio": 18.77602742315593,
+    "ms": 6308.053255081177,
+    "note": ""
+  },
+  {
+    "dataset": "BGL",
+    "method": "brotli-11",
+    "raw_bytes": 26817462,
+    "out_bytes": 1398793,
+    "ratio": 19.17185888119257,
+    "ms": 24998.34680557251,
+    "note": ""
+  },
+  {
+    "dataset": "BGL",
+    "method": "USC-STREAM",
+    "raw_bytes": 26817462,
+    "out_bytes": 3215218,
+    "ratio": 8.340791199850212,
+    "ms": 5316.534757614136,
+    "note": ""
+  },
+  {
+    "dataset": "BGL",
+    "method": "USC-HOT-LITE",
+    "raw_bytes": 26817462,
+    "out_bytes": 2223358,
+    "ratio": 12.061693168621517,
+    "ms": 1616.9114112854004,
+    "note": ""
+  },
+  {
+    "dataset": "BGL",
+    "method": "USC-HOT",
+    "raw_bytes": 26817462,
+    "out_bytes": 4447734,
+    "ratio": 6.029466240562048,
+    "ms": 1870.4824447631836,
+    "note": ""
+  },
+  {
+    "dataset": "BGL",
+    "method": "USC-COLD",
+    "raw_bytes": 26817462,
+    "out_bytes": 2223330,
+    "ratio": 12.06184507023249,
+    "ms": 1608.3595752716064,
+    "note": ""
+  },
+  {
+    "dataset": "Apache",
+    "method": "gzip",
+    "raw_bytes": 5135877,
+    "out_bytes": 262804,
+    "ratio": 19.542613506643736,
+    "ms": 28.549909591674805,
+    "note": ""
+  },
+  {
+    "dataset": "Apache",
+    "method": "zstd-19",
+    "raw_bytes": 5135877,
+    "out_bytes": 178235,
+    "ratio": 28.815199034981905,
+    "ms": 1025.5508422851562,
+    "note": ""
+  },
+  {
+    "dataset": "Apache",
+    "method": "brotli-11",
+    "raw_bytes": 5135877,
+    "out_bytes": 166650,
+    "ratio": 30.818343834383437,
+    "ms": 3253.1371116638184,
+    "note": ""
+  },
+  {
+    "dataset": "Apache",
+    "method": "USC-STREAM",
+    "raw_bytes": 5135877,
+    "out_bytes": 640316,
+    "ratio": 8.020847519037476,
+    "ms": 1654.2718410491943,
+    "note": ""
+  },
+  {
+    "dataset": "Apache",
+    "method": "USC-HOT-LITE",
+    "raw_bytes": 5135877,
+    "out_bytes": 237315,
+    "ratio": 21.64160293281082,
+    "ms": 850.1343727111816,
+    "note": ""
+  },
+  {
+    "dataset": "Apache",
+    "method": "USC-HOT",
+    "raw_bytes": 5135877,
+    "out_bytes": 475648,
+    "ratio": 10.79764237419268,
+    "ms": 931.7383766174316,
+    "note": ""
+  },
+  {
+    "dataset": "Apache",
+    "method": "USC-COLD",
+    "raw_bytes": 5135877,
+    "out_bytes": 237287,
+    "ratio": 21.644156654178275,
+    "ms": 864.5644187927246,
+    "note": ""
+  },
+  {
+    "dataset": "Android",
+    "method": "gzip",
+    "raw_bytes": 24629629,
+    "out_bytes": 3439404,
+    "ratio": 7.161016559845834,
+    "ms": 242.22302436828613,
+    "note": ""
+  },
+  {
+    "dataset": "Android",
+    "method": "zstd-19",
+    "raw_bytes": 24629629,
+    "out_bytes": 1179056,
+    "ratio": 20.889278371850022,
+    "ms": 7527.2016525268555,
+    "note": ""
+  },
+  {
+    "dataset": "Android",
+    "method": "brotli-11",
+    "raw_bytes": 24629629,
+    "out_bytes": 1111094,
+    "ratio": 22.167007471915067,
+    "ms": 23176.482677459717,
+    "note": ""
+  },
+  {
+    "dataset": "Android",
+    "method": "USC-STREAM",
+    "raw_bytes": 24629629,
+    "out_bytes": 2997577,
+    "ratio": 8.216512536625414,
+    "ms": 46523.68712425232,
+    "note": ""
+  },
+  {
+    "dataset": "Android",
+    "method": "USC-HOT-LITE",
+    "raw_bytes": 24629629,
+    "out_bytes": 1976574,
+    "ratio": 12.460767469368715,
+    "ms": 41524.860858917236,
+    "note": ""
+  },
+  {
+    "dataset": "Android",
+    "method": "USC-HOT",
+    "raw_bytes": 24629629,
+    "out_bytes": 3954166,
+    "ratio": 6.22877972244969,
+    "ms": 43171.775579452515,
+    "note": ""
+  },
+  {
+    "dataset": "Android",
+    "method": "USC-COLD",
+    "raw_bytes": 24629629,
+    "out_bytes": 1976403,
+    "ratio": 12.46184558513623,
+    "ms": 42123.72422218323,
+    "note": ""
+  }
+]

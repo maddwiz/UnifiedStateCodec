@@ -1,1 +1,3 @@
-# usc.cli package
+from .app import main
+
+__all__ = ["main"]

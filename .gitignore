@@ -8,3 +8,11 @@ __pycache__/
 # venv
 .venv/
 venv/
+
+# packaging/build junk
+*.egg-info/
+dist/
+build/
+
+# local commit logs
+usc_commits.jsonl

@@ -28,6 +28,26 @@ def _normalize_keywords(keywords: Set[str]) -> Set[str]:
     return {k.strip().lower() for k in keywords if k.strip()}
 
 
+def _expand_match_terms(kws: Set[str]) -> List[List[str]]:
+    """
+    For each keyword, return a list of acceptable match terms.
+    - Normal keyword: ["keyword"]
+    - tool:NAME keyword: ["tool:name", "tool_call::name"]
+      so user can query with tool:web.open but we match decoded output.
+    """
+    out: List[List[str]] = []
+    for k in kws:
+        if k.startswith("tool:"):
+            name = k.split("tool:", 1)[1].strip()
+            if name:
+                out.append([k, f"tool_call::{name}"])
+            else:
+                out.append([k])
+        else:
+            out.append([k])
+    return out
+
+
 def recall_from_odc2s(
     blob: bytes,
     packets_all: List[bytes],
@@ -42,15 +62,12 @@ def recall_from_odc2s(
     Strategy:
       1) Bloom -> candidate packet indices
       2) packet indices -> block IDs
-      3) ALWAYS include the dict packet block (packet 0)
+      3) ALWAYS include dict packet block (packet 0)
       4) Decode only those blocks
       5) Decode lines and post-filter for correctness
     """
     kws = _normalize_keywords(keywords)
-    if not kws:
-        return RecallResult(matched_lines=[], selected_packets=0, selected_blocks=0, total_blocks=0)
-
-    if not packets_all:
+    if not kws or not packets_all:
         return RecallResult(matched_lines=[], selected_packets=0, selected_blocks=0, total_blocks=0)
 
     # Build index if needed
@@ -63,7 +80,7 @@ def recall_from_odc2s(
             include_raw_lines=True,
         )
 
-    # Candidate packets (1..N-1 usually)
+    # Candidate packets (Bloom test)
     want_packet_indices = query_packets_for_keywords(kwi, packets_all, kws)
 
     # Convert packets -> blocks
@@ -76,27 +93,41 @@ def recall_from_odc2s(
     # Decode only selected blocks
     packets_part, meta = odc2s_decode_selected_blocks(blob, block_ids=block_ids)
 
-    # ✅ Safety: ensure dict packet is present at front
-    # If the dict packet is missing or not first, prepend it.
+    # ✅ Ensure dict packet is present at front
     if not packets_part:
         packets_part = [packets_all[0]]
     else:
-        # dict packet should be packets_all[0]
         if packets_part[0] != packets_all[0]:
             packets_part = [packets_all[0]] + packets_part
 
     # Decode to lines
     lines = decode_sas_packets_to_lines(packets_part)
 
-    # Post-filter for exact correctness (Bloom can false-positive)
+    # Expand match terms (fixes tool:* queries)
+    match_terms = _expand_match_terms(kws)
+
+    # Post-filter for exact correctness
     out: List[str] = []
     for ln in lines:
         lnl = ln.lower()
+
         if require_all:
-            if all(k in lnl for k in kws):
+            ok = True
+            for term_group in match_terms:
+                # each keyword group matches if ANY of its terms appear
+                if not any(t in lnl for t in term_group):
+                    ok = False
+                    break
+            if ok:
                 out.append(ln)
         else:
-            if any(k in lnl for k in kws):
+            # OR mode: match if ANY keyword group matches
+            hit_any = False
+            for term_group in match_terms:
+                if any(t in lnl for t in term_group):
+                    hit_any = True
+                    break
+            if hit_any:
                 out.append(ln)
 
     return RecallResult(

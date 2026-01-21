@@ -4,7 +4,7 @@ import csv
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Tuple
+from typing import List, Tuple, Optional
 
 
 # Supports both LogHub wildcard styles:
@@ -21,7 +21,7 @@ def _normalize_template(tpl: str) -> str:
     """
     Replace explicit timestamps/dates with wildcards so templates aren't date-locked.
     """
-    s = tpl.strip()
+    s = (tpl or "").strip()
     s = _TS_FULL.sub("<*>", s)
     s = _TS_DATE.sub("<*>", s)
     return s
@@ -32,7 +32,9 @@ def _compile_template_regex(template: str) -> Tuple[re.Pattern, int, str]:
     Compile template to regex that captures wildcards.
     Returns:
       (regex, wildcard_count, anchor_literal)
-    Anchor literal is the longest literal segment used to skip most regex checks fast.
+
+    anchor_literal = the longest literal segment used as a fast prefilter
+                    so we skip most regex checks quickly.
     """
     t = _normalize_template(template)
 
@@ -59,111 +61,119 @@ def _compile_template_regex(template: str) -> Tuple[re.Pattern, int, str]:
 
 
 @dataclass
+class CompiledTemplate:
+    event_id: int
+    rx: re.Pattern
+    wildcard_count: int
+    anchor: str
+
+
 class HDFSTemplateBank:
     """
-    Template bank built from LogHub CSV:
-      EventId,EventTemplate
+    Loads LogHub-style template CSV: columns include:
+      - EventId
+      - EventTemplate
     """
-    compiled: List[Tuple[int, re.Pattern, int, str, str]]
-    # tuple = (event_id_int, regex, wildcard_count, raw_template, anchor)
+
+    def __init__(self, compiled: List[CompiledTemplate]):
+        self.compiled = compiled
 
     @classmethod
-    def from_csv(cls, csv_path: str | Path) -> "HDFSTemplateBank":
-        path = Path(csv_path)
-        compiled: List[Tuple[int, re.Pattern, int, str, str]] = []
+    def from_csv(cls, path: Path | str) -> "HDFSTemplateBank":
+        p = Path(path)
+        compiled: List[CompiledTemplate] = []
 
-        with path.open("r", encoding="utf-8", errors="ignore", newline="") as f:
-            reader = csv.DictReader(f)
-            for row in reader:
-                eid_s = (row.get("EventId") or "").strip()
+        with p.open("r", encoding="utf-8", errors="ignore", newline="") as f:
+            r = csv.DictReader(f)
+            for row in r:
+                eid_raw = (row.get("EventId") or "").strip()
                 tpl = (row.get("EventTemplate") or "").strip()
-                if not eid_s or not tpl:
+                if not eid_raw or not tpl:
                     continue
-
-                # EventId looks like "E000123" -> int 123
                 try:
-                    eid = int(eid_s[1:])
+                    eid = int(eid_raw)
                 except Exception:
                     continue
 
                 rx, wc, anchor = _compile_template_regex(tpl)
-                compiled.append((eid, rx, wc, tpl, anchor))
+                compiled.append(CompiledTemplate(event_id=eid, rx=rx, wildcard_count=wc, anchor=anchor))
 
-        # Prefer more specific templates first (fewer wildcards)
-        compiled.sort(key=lambda x: x[2])
-        return cls(compiled=compiled)
+        # Prefer templates that are more specific:
+        # 1) fewer wildcards first
+        # 2) longer anchor first (more selective)
+        compiled.sort(key=lambda x: (x.wildcard_count, -len(x.anchor)))
+
+        return cls(compiled)
 
 
-def parse_hdfs_lines(
-    lines: List[str],
-    bank: HDFSTemplateBank,
-) -> Tuple[List[Tuple[int, List[str]]], List[str]]:
+def parse_hdfs_lines(lines: List[str], bank: HDFSTemplateBank) -> Tuple[List[Tuple[int, List[str]]], List[str]]:
     """
     Returns:
-      events: [(event_id_int, params)]
-      unknown_lines: [raw_line]
-
-    NOTE: This loses row ordering. (Good for cold/stream.)
+      events: list[(event_id, params)]
+      unknown_lines: list[str] (raw lines that didn't match)
     """
     events: List[Tuple[int, List[str]]] = []
-    unknown_lines: List[str] = []
+    unknown: List[str] = []
 
     for ln in lines:
-        s = ln.rstrip("\n")
-        matched = False
+        s = (ln or "").rstrip("\n")
+        hit = False
 
-        for eid, rx, _wc, _tpl, anchor in bank.compiled:
-            # ✅ fast prefilter
-            if anchor and anchor not in s:
+        for ct in bank.compiled:
+            # FAST PREFILTER (huge speedup on noisy datasets)
+            if ct.anchor and ct.anchor not in s:
                 continue
 
-            m = rx.match(s)
-            if m:
-                params = list(m.groups()) if m.groups() else []
-                events.append((eid, params))
-                matched = True
-                break
+            m = ct.rx.match(s)
+            if not m:
+                continue
 
-        if not matched:
-            unknown_lines.append(s)
+            params = list(m.groups()) if m.groups() else []
+            events.append((ct.event_id, params))
+            hit = True
+            break
 
-    return events, unknown_lines
+        if not hit:
+            unknown.append(s)
+
+    return events, unknown
 
 
 def parse_hdfs_lines_rows(
     lines: List[str],
     bank: HDFSTemplateBank,
-) -> Tuple[List[Tuple[int, List[str]] | None], List[str]]:
+) -> Tuple[List[Optional[Tuple[int, List[str]]]], List[str]]:
     """
-    ✅ Row-preserving parser for H1M2 (hot/hot-lite lossless).
+    ROW-PRESERVING parser for H1M2:
 
     Returns:
-      rows: list same length as `lines`
-            rows[i] = (event_id_int, params) if template match
-            rows[i] = None if unknown/raw row
-      unknown_lines: raw strings in the same order as the None rows appear
+      rows: list length == len(lines)
+        - (event_id, params) for matched template rows
+        - None for raw/unknown rows
 
-    This is what we need to make query modes truly lossless across mixed logs.
+      unknown_lines: raw lines in the SAME ORDER as the None rows appear
     """
-    rows: List[Tuple[int, List[str]] | None] = []
+    rows: List[Optional[Tuple[int, List[str]]]] = []
     unknown_lines: List[str] = []
 
     for ln in lines:
-        s = ln.rstrip("\n")
-        matched = False
+        s = (ln or "").rstrip("\n")
+        matched: Optional[Tuple[int, List[str]]] = None
 
-        for eid, rx, _wc, _tpl, anchor in bank.compiled:
-            if anchor and anchor not in s:
+        for ct in bank.compiled:
+            if ct.anchor and ct.anchor not in s:
                 continue
-            m = rx.match(s)
-            if m:
-                params = list(m.groups()) if m.groups() else []
-                rows.append((eid, params))
-                matched = True
-                break
+            m = ct.rx.match(s)
+            if not m:
+                continue
+            params = list(m.groups()) if m.groups() else []
+            matched = (ct.event_id, params)
+            break
 
-        if not matched:
+        if matched is None:
             rows.append(None)
             unknown_lines.append(s)
+        else:
+            rows.append(matched)
 
     return rows, unknown_lines

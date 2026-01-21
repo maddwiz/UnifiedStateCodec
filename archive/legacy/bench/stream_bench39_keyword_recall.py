@@ -1,0 +1,90 @@
+import time
+
+from usc.bench.datasets_mixed_tool_trace import mixed_tool_trace
+from usc.mem.sas_dict_token_v1 import build_sas_packets_from_text
+from usc.mem.sas_keyword_index_v0 import build_keyword_index
+from usc.mem.usc_recall_v0 import recall_from_odc2s
+
+from usc.api.odc2_sharded_v0 import odc2s_encode_packets
+
+
+def run():
+    steps = 1200
+    text = mixed_tool_trace(steps=steps, seed=7)
+
+    max_lines = 10
+    group_size = 2
+
+    packets = build_sas_packets_from_text(
+        text,
+        max_lines_per_packet=max_lines,
+        tok_top_k=0,
+    )
+
+    t0 = time.perf_counter()
+    blob, meta = odc2s_encode_packets(
+        packets,
+        group_size=group_size,
+        dict_target_size=8192,
+        zstd_level=10,
+        sample_blocks=64,
+    )
+    t1 = time.perf_counter()
+
+    t2 = time.perf_counter()
+    kwi = build_keyword_index(
+        packets,
+        m_bits=2048,
+        k_hashes=4,
+        include_tool_names=True,
+        include_raw_lines=True,
+    )
+    t3 = time.perf_counter()
+
+    tests = [
+        {"tool:web.screenshot"},
+        {"tool:finance"},
+        {"tool:weather"},
+        {"tool:web.click"},
+        {"tool:web.open"},
+        {"tool:web.search_query"},
+        {"evaluating"},          # exists
+        {"evaluate"},            # does not exist (no stemming)
+        {"mismatch"},            # should be rarer
+        {"scratchpad"},          # should be rarer
+        {"minor", "mismatch"},   # multi-keyword AND = much smaller candidate set
+    ]
+
+    print("USC Bench39 — Keyword recall (Bloom -> block skip -> post filter)")
+    print(f"Preset: max_lines={max_lines} | group={group_size}")
+    print("Packets:", len(packets), "| Blocks:", meta.block_count, "| Bytes:", len(blob))
+    print("------------------------------------------------------------")
+    print("Encode time (ms):", round((t1 - t0) * 1000, 2))
+    print("Index time  (ms):", round((t3 - t2) * 1000, 2))
+    print("------------------------------------------------------------")
+
+    for kws in tests:
+        ta = time.perf_counter()
+        res = recall_from_odc2s(
+            blob=blob,
+            packets_all=packets,
+            keywords=kws,
+            kwi=kwi,
+            group_size=group_size,
+            require_all=True,
+        )
+        tb = time.perf_counter()
+
+        pct = 100.0 * res.selected_blocks / max(1, res.total_blocks)
+        label = "+".join(sorted(kws))
+        print(
+            f"{label:28s} | sel_blocks={res.selected_blocks:3d}/{res.total_blocks:3d} ({pct:5.1f}%) | "
+            f"sel_pkts={res.selected_packets:3d} | hits={len(res.matched_lines):3d} | "
+            f"time_ms={(tb-ta)*1000:6.2f}"
+        )
+
+    print("------------------------------------------------------------")
+
+
+if __name__ == "__main__":
+    run()

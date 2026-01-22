@@ -7,34 +7,55 @@ from pathlib import Path
 from typing import List, Tuple, Optional
 
 
-# Supports both LogHub wildcard styles:
-#   - Drain / LogHub style: "<*>"
-#   - Older style: "[*]"
 _WILDCARD_RE = re.compile(r"(\<\*\>|\[\*\])")
 
-# Timestamp patterns commonly seen in LogHub:
 _TS_FULL = re.compile(r"\b\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2},\d{3}\b")
 _TS_DATE = re.compile(r"\b\d{4}-\d{2}-\d{2}\b")
 
 
 def _normalize_template(tpl: str) -> str:
-    """
-    Replace explicit timestamps/dates with wildcards so templates aren't date-locked.
-    """
     s = (tpl or "").strip()
     s = _TS_FULL.sub("<*>", s)
     s = _TS_DATE.sub("<*>", s)
     return s
 
 
+def _parse_event_id(eid_raw: str) -> Optional[int]:
+    """
+    LogHub templates often use EventId like:
+      - "E1", "E2", ...
+      - or numeric strings
+      - sometimes hex-ish
+    We convert to a stable int ID for packing.
+    """
+    if not eid_raw:
+        return None
+    eid_raw = eid_raw.strip()
+
+    # Pure integer
+    try:
+        return int(eid_raw)
+    except Exception:
+        pass
+
+    # "E123" format
+    if (len(eid_raw) >= 2) and (eid_raw[0] in ("E", "e")) and eid_raw[1:].isdigit():
+        return int(eid_raw[1:])
+
+    # Hex-ish (0x...)
+    if eid_raw.lower().startswith("0x"):
+        try:
+            return int(eid_raw, 16)
+        except Exception:
+            pass
+
+    return None
+
+
 def _compile_template_regex(template: str) -> Tuple[re.Pattern, int, str]:
     """
-    Compile template to regex that captures wildcards.
-    Returns:
-      (regex, wildcard_count, anchor_literal)
-
-    anchor_literal = the longest literal segment used as a fast prefilter
-                    so we skip most regex checks quickly.
+    Compile template to regex capturing wildcards.
+    Returns: (regex, wildcard_count, anchor_literal)
     """
     t = _normalize_template(template)
 
@@ -69,12 +90,6 @@ class CompiledTemplate:
 
 
 class HDFSTemplateBank:
-    """
-    Loads LogHub-style template CSV: columns include:
-      - EventId
-      - EventTemplate
-    """
-
     def __init__(self, compiled: List[CompiledTemplate]):
         self.compiled = compiled
 
@@ -90,28 +105,21 @@ class HDFSTemplateBank:
                 tpl = (row.get("EventTemplate") or "").strip()
                 if not eid_raw or not tpl:
                     continue
-                try:
-                    eid = int(eid_raw)
-                except Exception:
+
+                eid = _parse_event_id(eid_raw)
+                if eid is None:
                     continue
 
                 rx, wc, anchor = _compile_template_regex(tpl)
                 compiled.append(CompiledTemplate(event_id=eid, rx=rx, wildcard_count=wc, anchor=anchor))
 
-        # Prefer templates that are more specific:
-        # 1) fewer wildcards first
-        # 2) longer anchor first (more selective)
+        # Prefer more specific templates first
         compiled.sort(key=lambda x: (x.wildcard_count, -len(x.anchor)))
 
         return cls(compiled)
 
 
 def parse_hdfs_lines(lines: List[str], bank: HDFSTemplateBank) -> Tuple[List[Tuple[int, List[str]]], List[str]]:
-    """
-    Returns:
-      events: list[(event_id, params)]
-      unknown_lines: list[str] (raw lines that didn't match)
-    """
     events: List[Tuple[int, List[str]]] = []
     unknown: List[str] = []
 
@@ -120,14 +128,11 @@ def parse_hdfs_lines(lines: List[str], bank: HDFSTemplateBank) -> Tuple[List[Tup
         hit = False
 
         for ct in bank.compiled:
-            # FAST PREFILTER (huge speedup on noisy datasets)
             if ct.anchor and ct.anchor not in s:
                 continue
-
             m = ct.rx.match(s)
             if not m:
                 continue
-
             params = list(m.groups()) if m.groups() else []
             events.append((ct.event_id, params))
             hit = True
@@ -143,16 +148,6 @@ def parse_hdfs_lines_rows(
     lines: List[str],
     bank: HDFSTemplateBank,
 ) -> Tuple[List[Optional[Tuple[int, List[str]]]], List[str]]:
-    """
-    ROW-PRESERVING parser for H1M2:
-
-    Returns:
-      rows: list length == len(lines)
-        - (event_id, params) for matched template rows
-        - None for raw/unknown rows
-
-      unknown_lines: raw lines in the SAME ORDER as the None rows appear
-    """
     rows: List[Optional[Tuple[int, List[str]]]] = []
     unknown_lines: List[str] = []
 

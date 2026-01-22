@@ -28,7 +28,7 @@ RESULTS = ROOT / "results"
 
 PY = sys.executable
 
-USC_MODES = ["stream", "hot-lite", "hot", "cold"]
+USC_MODES = ["stream", "hot-lite", "hot-lite-full", "hot", "cold"]
 
 # ✅ HOT-LITE/HOT currently act like index/skeleton on some datasets
 # until PF1 params are implemented for them.

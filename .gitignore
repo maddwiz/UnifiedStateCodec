@@ -4,6 +4,7 @@
 results/*
 !results/bench_loghub_all.json
 !results/scoreboard_200k.md
+!results/clp/clp_bench.json
 
 *.bin
 *.usc*

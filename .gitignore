@@ -44,3 +44,6 @@ scripts/patch_*.py
 # --- keep important benchmark outputs tracked ---
 !results/baselines_gzip_zstd.json
 !results/bench_all_200k.json
+
+# keep scoreboard output tracked
+!results/scoreboard_full_200k.md

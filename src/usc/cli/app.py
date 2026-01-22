@@ -6,13 +6,16 @@ import struct
 import time
 from typing import Dict, List, Tuple
 
+from pathlib import Path
 try:
     import zstandard as zstd
 except Exception:
     zstd = None
 
-from usc.mem.hdfs_templates_v0 import HDFSTemplateBank, parse_hdfs_lines
+from usc.mem.hdfs_templates_v0 import HDFSTemplateBank, parse_hdfs_lines, parse_hdfs_lines_rows
+from usc.api.hdfs_template_codec_v1_channels_mask import encode_template_channels_v1_mask
 from usc.mem.tpl_pf1_recall_v1 import build_tpl_pf1_blob as build_pf1
+from usc.mem.tpl_pf1_recall_v3_h1m2 import build_tpl_pf3_blob_h1m2 as build_pf3_h1m2
 from usc.mem.tpl_pfq1_query_v1 import build_pfq1_blob as build_pfq1
 from usc.mem.tpl_fast_query_v1 import query_fast_pf1
 from usc.mem.tpl_query_router_v1 import query_router_v1
@@ -229,19 +232,12 @@ def cmd_encode(args: argparse.Namespace) -> None:
         print(f"ratio:   {_ratio(len(raw_bytes), len(hot_blob)):.2f}x")
 
     elif mode == "hot-lite":
-        t0 = time.perf_counter()
-        pf1_blob, _pf1_meta = build_pf1(events, unknown, tpl_text, packet_events=args.packet_events, zstd_level=args.zstd)
-        dt_pf1 = (time.perf_counter() - t0) * 1000.0
-
-        hot_blob = hot_pack(pf1_blob, b"")
-        with open(out_path, "wb") as f:
-            f.write(hot_blob)
-
-        print(f"RAW:     {_pretty(len(raw_bytes))}")
-        print(f"PF1:     {_pretty(len(pf1_blob))}   build={dt_pf1:.2f} ms")
-        print(f"USCH:    {_pretty(len(hot_blob))}   saved ✅ (HOT-LITE)")
-        print(f"ratio:   {_ratio(len(raw_bytes), len(hot_blob)):.2f}x")
-
+        rows, unknown = parse_hdfs_lines_rows(raw_lines, bank)
+        tpl_text = Path(tpl_path).read_text(encoding='utf-8', errors='ignore')
+        pf_blob, _meta = build_pf3_h1m2(rows, unknown, tpl_text, packet_events=args.packet_events, zstd_level=args.zstd)
+        Path(args.out).write_bytes(pf_blob)
+        print('USCH:', f"{len(pf_blob)/1024.0:.2f} KB", ' saved ✅ (HOT-LITE H1M2 PF3)')
+        return
     elif mode == "hot-lazy":
         t0 = time.perf_counter()
         pf1_blob, _pf1_meta = build_pf1(events, unknown, tpl_text, packet_events=args.packet_events, zstd_level=args.zstd)
@@ -255,6 +251,17 @@ def cmd_encode(args: argparse.Namespace) -> None:
         print(f"PF1:     {_pretty(len(pf1_blob))}   build={dt_pf1:.2f} ms")
         print(f"USCH:    {_pretty(len(hot_blob))}   saved ✅ (HOT-LAZY)")
         print(f"ratio:   {_ratio(len(raw_bytes), len(hot_blob)):.2f}x")
+
+    elif mode == "cold-oracle":
+        if not tpl_path:
+            raise SystemExit("cold-oracle requires --tpl")
+        bank = HDFSTemplateBank.from_csv(tpl_path)
+        events, unknown = parse_hdfs_lines(raw_lines, bank)
+        blob = encode_template_channels_v1_mask(events, unknown)
+        Path(args.out).write_bytes(blob)
+        print('BUNDLE:', f"{len(blob)/1024.0:.2f} KB", ' build=oracle')
+        print('USCC:',   f"{len(blob)/1024.0:.2f} KB", ' saved ✅')
+        return
 
     elif mode == "cold":
         t0 = time.perf_counter()

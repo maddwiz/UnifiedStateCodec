@@ -115,7 +115,7 @@ def _run_usc_mode(log_path: Path, mode: str, lines: int, tpl_path: Path | None) 
         "-m",
         "usc",
         "encode",
-        "--mode", mode,
+        "--mode", ("cold" if mode=="cold-oracle" else mode),
         "--log", str(log_path),
         "--lines", str(lines),
         "--out", str(out_bin),

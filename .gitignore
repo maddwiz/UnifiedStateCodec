@@ -3,6 +3,7 @@
 # -----------------------
 results/*
 !results/bench_loghub_all.json
+!results/scoreboard_200k.md
 
 *.bin
 *.usc*
@@ -29,4 +30,3 @@ __pycache__/
 # temp / debug scripts
 # -----------------------
 scripts/debug_*.py
-scripts/patch_*.py

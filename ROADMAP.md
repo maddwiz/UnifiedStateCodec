@@ -1,32 +1,31 @@
-# USC Roadmap
+# ROADMAP — Unified State Codec (USC)
 
-## Current Status (Baseline)
-- USC-cold beats zstd-19 on multiple LogHub datasets
-- HOT/HOT-LITE provide query framing but currently labeled INDEX-ONLY in suite output
+## Phase 0 — Proof of Reality ✅
+- [x] Template mining + parameter extraction
+- [x] Multi-mode compress (stream / hot-lite / hot / cold)
+- [x] Real dataset suite (LogHub baseline)
+- [x] PF3(H1M2) lossless rehydration verified (200k lines)
+- [x] hot-lite-full mode to store restorable PF3 payload
 
-## Milestone 1 — Make HOT/HOT-LITE fully lossless (H1M2 Row Mask)
-Goal: searchable + lossless + compressive across mixed unknown/event rows.
+## Phase 1 — Baseline + Publishing (NOW)
+- [ ] Run full LogHub suite @ 200k lines on all datasets
+- [ ] README scoreboard (sizes, ratios for gzip/zstd/USC modes)
+- [ ] Add encode/decode timing + query timing
+- [ ] Add “auto fallback”: if low repetition → use zstd; else USC modes
 
-Tasks:
-- Implement H1M2 row mask codec in encoder/decoder pipeline
-- Add decode/roundtrip verifier to benchmark suite
-- Remove INDEX-ONLY label once verified
+## Phase 2 — Query Productization
+- [ ] Standard query interface: keyword search + template search
+- [ ] Bloom/packet index profiling and tuning
+- [ ] Partial decode (only packets matching query)
+- [ ] CLI polish (`usc encode/query/decode/bench` stable)
 
-## Milestone 2 — Full competitor bakeoff
-Add baselines:
-- CLP (y-scope)
-- Logzip / LogShrink (if runnable)
-- zstd w/ dictionary training
+## Phase 3 — Competitor Benchmarks
+- [ ] CLP head-to-head (ratio + query latency)
+- [ ] LogZip/LogShrink/others when feasible
+- [ ] Publish reproducible scripts and results table
 
-Deliverables:
-- README table with ratios + encode time + query time
+## Phase 4 — Packaging + Adoption
+- [ ] PyPI package
+- [ ] One-command quickstart demo
+- [ ] “Agent memory store” adapter (LangGraph/LangChain compatible)
 
-## Milestone 3 — Production polish
-- Stable CLI
-- PyPI package
-- Better docs + examples
-- Optional Rust hotpath rewrite
-
-## Milestone 4 — Agent memory integration
-- USC-backed memory store adapter for agent frameworks
-- Query by entity/tool/error/time ranges

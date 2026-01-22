@@ -1,27 +1,22 @@
-# MASTER HANDOFF — USC (Unified State Codec)
+# MASTER_HANDOFF — Unified State Codec (USC)
 
-## What USC is
-A domain-specific compression codec for structured logs and AI agent traces.
-It uses template mining, typed parameter channels, and bitpacking to beat general compressors.
+## Current Status (2026-01-21)
+USC is a domain-specific compression system for structured logs/agent traces.
 
-## Current Best Mode
-- USC-cold: strongest compression (lossless)
+### Confirmed Working
+- USC-cold achieves extremely high ratios on multiple LogHub datasets (e.g., 50–80× range in earlier runs).
+- PF3(H1M2) format is lossless: verified roundtrip on 200,000 lines.
+- `hot-lite` mode is index-only (fast query, not decodable).
+- `hot-lite-full` mode stores full PF3 payload (restorable).
 
-## Key Outcomes Achieved
-- Restored typed slot detection (INT/IP/HEX/DICT/RAW) + safe INT handling
-- Fixed LogHub `<*>` wildcard extraction so params are preserved (lossless)
-- Real LogHub baseline (200k lines) saved in results/bench_loghub_all.json
-- USC-cold beats zstd-19 on BGL / Zookeeper / HDFS / Apache / Android
+### Repo Hygiene
+- `.gitignore` prevents artifacts/data from polluting commits
+- `results/bench_loghub_all.json` remains tracked for reproducible benchmarks
 
-## Known Limits / TODO
-- hot/hot-lite still labeled INDEX-ONLY until row-order H1M2 is fully wired for mixed unknown/event rows
-- stream mode is slower, mainly for baseline comparison
+## Next Steps
+1) Run full LogHub suite @ 200k lines across all modes.
+2) Generate README scoreboard table from JSON.
+3) Add/confirm CLI decode for hot-lite-full payload.
+4) Add timing metrics (encode/decode/query).
+5) Begin CLP competitor comparison.
 
-## How to run benchmarks
-USC_SUITE_LINES=200000 PYTHONPATH=src python3 scripts/bench_loghub_all.py
-
-Output:
-results/bench_loghub_all.json
-
-## Next step
-Implement H1M2 row-order mask into hot/hot-lite encoder so query modes are fully lossless.

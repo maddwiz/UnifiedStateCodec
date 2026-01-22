@@ -4,7 +4,12 @@
 results/*
 !results/bench_loghub_all.json
 !results/scoreboard_200k.md
+
+# allow CLP results folder + its json files
+!results/clp/
+results/clp/*
 !results/clp/clp_bench.json
+!results/clp/clp_search.json
 
 *.bin
 *.usc*

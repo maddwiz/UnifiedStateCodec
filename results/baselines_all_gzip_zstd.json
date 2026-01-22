@@ -1,0 +1,42 @@
+{
+  "Android": {
+    "raw_path": "results/raw_all_200k/Android_200k.log",
+    "raw_size": 24829629,
+    "gzip_size": 3341737,
+    "zstd_size": 1181988,
+    "gzip_ratio": 7.430156532366252,
+    "zstd_ratio": 21.006667580381528
+  },
+  "Apache": {
+    "raw_path": "results/raw_all_200k/Apache_200k.log",
+    "raw_size": 5135876,
+    "gzip_size": 240831,
+    "zstd_size": 178238,
+    "gzip_ratio": 21.32564329342983,
+    "zstd_ratio": 28.814708423568486
+  },
+  "BGL": {
+    "raw_path": "results/raw_all_200k/BGL_200k.log",
+    "raw_size": 26817462,
+    "gzip_size": 2474844,
+    "zstd_size": 1428286,
+    "gzip_ratio": 10.83602117951677,
+    "zstd_ratio": 18.775974839772985
+  },
+  "HDFS": {
+    "raw_path": "results/raw_all_200k/HDFS_200k.log",
+    "raw_size": 28208761,
+    "gzip_size": 2430181,
+    "zstd_size": 1679002,
+    "gzip_ratio": 11.60767901650124,
+    "zstd_ratio": 16.800909707075988
+  },
+  "Zookeeper": {
+    "raw_path": "results/raw_all_200k/Zookeeper_200k.log",
+    "raw_size": 10426438,
+    "gzip_size": 401161,
+    "zstd_size": 267509,
+    "gzip_ratio": 25.99065711771583,
+    "zstd_ratio": 38.97602697479337
+  }
+}

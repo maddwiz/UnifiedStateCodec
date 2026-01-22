@@ -47,3 +47,7 @@ scripts/patch_*.py
 
 # keep scoreboard output tracked
 !results/scoreboard_full_200k.md
+
+# --- keep key benchmark outputs tracked ---
+!results/baselines_all_gzip_zstd.json
+!results/scoreboard_baselines_all.md

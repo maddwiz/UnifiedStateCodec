@@ -40,3 +40,7 @@ scripts/debug_*.py
 
 # ignore patch scripts
 scripts/patch_*.py
+
+# --- keep important benchmark outputs tracked ---
+!results/baselines_gzip_zstd.json
+!results/bench_all_200k.json

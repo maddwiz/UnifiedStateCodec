@@ -1,18 +1,32 @@
-# local datasets / benchmarks
+# -----------------------
+# USC artifacts / outputs
+# -----------------------
+results/*
+!results/bench_loghub_all.json
+
+*.bin
+*.usc*
+*.uscc
+*.usch
+*.uscstream
+*.log
+
+# -----------------------
+# downloaded datasets
+# -----------------------
 data/
 
+# -----------------------
 # python junk
+# -----------------------
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
+.ipynb_checkpoints/
 
-# venv
-.venv/
-venv/
-
-# packaging/build junk
-*.egg-info/
-dist/
-build/
-
-# local commit logs
-usc_commits.jsonl
+# -----------------------
+# temp / debug scripts
+# -----------------------
+scripts/debug_*.py
+scripts/patch_*.py

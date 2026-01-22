@@ -16,6 +16,7 @@ from usc.mem.hdfs_templates_v0 import HDFSTemplateBank, parse_hdfs_lines, parse_
 from usc.api.hdfs_template_codec_v1_channels_mask import encode_template_channels_v1_mask
 from usc.mem.tpl_pf1_recall_v1 import build_tpl_pf1_blob as build_pf1
 from usc.mem.tpl_pf1_recall_v3_h1m2 import build_tpl_pf3_blob_h1m2 as build_pf3_h1m2
+from usc.mem.tpl_pf3_decode_v1_h1m2 import decode_pf3_h1m2_to_lines
 from usc.mem.tpl_pfq1_query_v1 import build_pfq1_blob as build_pfq1
 from usc.mem.tpl_fast_query_v1 import query_fast_pf1
 from usc.mem.tpl_query_router_v1 import query_router_v1
@@ -232,6 +233,13 @@ def cmd_encode(args: argparse.Namespace) -> None:
         print(f"ratio:   {_ratio(len(raw_bytes), len(hot_blob)):.2f}x")
 
     elif mode == "hot-lite":
+        rows, unknown = parse_hdfs_lines_rows(raw_lines, bank)
+        tpl_text = Path(tpl_path).read_text(encoding='utf-8', errors='ignore')
+        pf_blob, _meta = build_pf3_h1m2(rows, unknown, tpl_text, packet_events=args.packet_events, zstd_level=args.zstd)
+        Path(args.out).write_bytes(pf_blob)
+        print('USCH:', f"{len(pf_blob)/1024.0:.2f} KB", ' saved ✅ (HOT-LITE H1M2 PF3)')
+        return
+    elif mode == "hot-lite-full":
         rows, unknown = parse_hdfs_lines_rows(raw_lines, bank)
         tpl_text = Path(tpl_path).read_text(encoding='utf-8', errors='ignore')
         pf_blob, _meta = build_pf3_h1m2(rows, unknown, tpl_text, packet_events=args.packet_events, zstd_level=args.zstd)
@@ -505,8 +513,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sub = p.add_subparsers(dest="cmd", required=True)
 
+    # -----------------------
+    # decode (PF3 hot-lite)
+    # -----------------------
+    p_decode = sub.add_parser("decode", help="Decode USC blobs back to lines (hot-lite PF3)")
+    p_decode.add_argument("--mode", default="hot-lite", choices=["hot-lite", "hot-lite-full"], help="Decode mode")
+    p_decode.add_argument("--input", "--in", dest="input", required=True, help="Input .bin file")
+    p_decode.add_argument("--out", "--output", dest="out", required=True, help="Output .log file")
+
     enc = sub.add_parser("encode", help="Encode a log into HOT/HOT-LITE/HOT-LAZY/COLD/STREAM")
-    enc.add_argument("--mode", choices=["hot", "hot-lite", "hot-lazy", "cold", "stream"], required=True)
+    enc.add_argument("--mode", choices=["hot", "hot-lite", "hot-lazy", "cold", "stream", "hot-lite-full"], required=True)
     enc.add_argument("--log", default="data/loghub/HDFS.log")
     enc.add_argument("--tpl", default="data/loghub/preprocessed/HDFS.log_templates.csv")
     enc.add_argument("--out", required=True)
@@ -545,6 +561,53 @@ def build_parser() -> argparse.ArgumentParser:
 def main():
     p = build_parser()
     args = p.parse_args()
+    # -----------------------
+    # decode command (PF3 hot-lite)
+    # -----------------------
+    if getattr(args, "cmd", None) == "decode":
+        from pathlib import Path
+
+        in_path = Path(args.input)
+        out_path = Path(args.out)
+
+        blob = in_path.read_bytes()
+
+        magic = b"TPF3"
+
+        # ✅ Robust: the file may contain multiple 'TPF3' occurrences.
+        # We try each one until PF3 decode succeeds.
+        offs = []
+        start = 0
+        while True:
+            j = blob.find(magic, start)
+            if j < 0:
+                break
+            offs.append(j)
+            start = j + 1
+
+        if not offs:
+            raise SystemExit("❌ Could not find PF3 magic (TPF3) anywhere inside input file")
+
+        last_err = None
+        lines = None
+
+        for off in offs:
+            try:
+                pf3 = blob[off:]
+                lines = decode_pf3_h1m2_to_lines(pf3)
+                # success
+                break
+            except Exception as e:
+                last_err = e
+                continue
+
+        if lines is None:
+            raise SystemExit(f"❌ Found TPF3 markers but none decoded successfully. Last error: {last_err}")
+
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        print("✅ decoded:", len(lines), "lines →", str(out_path))
+        return
     args.func(args)
 
 

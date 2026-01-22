@@ -1,15 +1,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Dict
 import struct
-
-from usc.api.hdfs_template_codec_h1m2_rowmask import encode_h1m2_rowmask_blob
 
 try:
     import zstandard as zstd
 except Exception:
     zstd = None
+
+from usc.api.hdfs_template_codec_h1m2_rowmask import encode_h1m2_rowmask_blob
 
 MAGIC = b"TPF3"
 VERSION = 1
@@ -36,158 +36,95 @@ def _bytes_encode(b: bytes) -> bytes:
 def _zstd_compress(buf: bytes, level: int = 10) -> bytes:
     if zstd is None:
         raise RuntimeError("zstandard missing (pip install zstandard)")
-    cctx = zstd.ZstdCompressor(level=level)
-    return cctx.compress(buf)
-
-
-def _encode_eidset(eids: List[int]) -> bytes:
-    # delta varint
-    out = bytearray()
-    out += _uvarint_encode(len(eids))
-    prev = 0
-    for x in eids:
-        d = int(x) - prev
-        prev = int(x)
-        out += _uvarint_encode(d)
-    return bytes(out)
+    return zstd.ZstdCompressor(level=level).compress(buf)
 
 
 @dataclass
 class PF3Meta:
-    packet_events: int
-    zstd_level: int
-    templates_csv: str
-    row_count: int
-    unknown_count: int
+    rows: int
+    chunks: int
+    unknown_rows: int
+    bytes_raw_chunks: int
+    bytes_zstd_chunks: int
 
 
 def build_tpl_pf3_blob_h1m2(
     rows: List[Optional[Tuple[int, List[str]]]],
     unknown_lines: List[str],
-    template_csv_text: str,
-    packet_events: int = 32768,
+    tpl_text: str,
+    packet_events: int = 25,
     zstd_level: int = 10,
-) -> Tuple[bytes, PF3Meta]:
+) -> tuple[bytes, PF3Meta]:
     """
-    Layout:
-      MAGIC 'TPF3'
-      u32 VERSION
-      u32 zstd_level
-      u32 packet_events
-      u32 template_csv_len
-      template_csv_bytes
-      uvarint row_count
-      uvarint unknown_count
-      uvarint packet_count
-      For each packet:
-        u32 offset
-        u32 length
-        eidset_bytes (len+payload)
-      packet_bytes...
+    PF3(H1M2):
+    - preserves original row order using rowmask
+    - supports unknown rows inline (lossless)
+    - chunked for streaming / query future expansion
 
-    Packet 0 raw_struct = H1M2 blob (contains rowmask + unknown_lines + first event chunk)
-    Packets 1..N raw_struct = H1M2 blob with EMPTY unknown_lines but includes event chunk.
+    Output format:
+      MAGIC(4) + VERSION(uvarint)
+      tpl_text_len(uvarint) + tpl_text_bytes
+      packet_events(uvarint)
+      total_rows(uvarint)
+      chunk_count(uvarint)
+      for each chunk:
+         flags(u8)  (bit0=zstd)
+         raw_len(uvarint)
+         payload_len(uvarint)
+         payload_bytes
     """
-    tpl_bytes = template_csv_text.encode("utf-8", errors="replace")
+    if packet_events <= 0:
+        packet_events = 25
 
-    # Extract events in order (rows preserve event order already)
-    events: List[Tuple[int, List[str]]] = [r for r in rows if r is not None]
-
-    packets: List[bytes] = []
-    eidsets: List[bytes] = []
-
-    i = 0
-    n = len(events)
-    pkt_idx = 0
-
-    while i < n:
-        chunk = events[i:i + packet_events]
-        i += packet_events
-
-        # only packet0 carries rowmask + unknown lines for full reconstruction
-        ul = unknown_lines if pkt_idx == 0 else []
-        # Build a “rows view” for the wrapper:
-        # For packet0 we include the REAL rows list so rowmask is present.
-        # For later packets we can pass a fake rows list sized 0 (rowmask omitted).
-        if pkt_idx == 0:
-            # rows are whole-file rows
-            raw_struct = encode_h1m2_rowmask_blob(rows, ul)
-        else:
-            # we encode just the chunk as event-only rows (no unknowns)
-            fake_rows: List[Optional[Tuple[int, List[str]]]] = [(eid, p) for (eid, p) in chunk]
-            raw_struct = encode_h1m2_rowmask_blob(fake_rows, ul)
-
-        comp = _zstd_compress(raw_struct, level=zstd_level)
-        packets.append(comp)
-
-        eids = [eid for eid, _p in chunk]
-        eidsets.append(_encode_eidset(eids))
-
-        pkt_idx += 1
+    tpl_bytes = (tpl_text or "").encode("utf-8", errors="ignore")
 
     out = bytearray()
     out += MAGIC
-    out += struct.pack("<I", VERSION)
-    out += struct.pack("<I", int(zstd_level))
-    out += struct.pack("<I", int(packet_events))
-    out += struct.pack("<I", len(tpl_bytes))
-    out += tpl_bytes
-
+    out += _uvarint_encode(VERSION)
+    out += _bytes_encode(tpl_bytes)
+    out += _uvarint_encode(packet_events)
     out += _uvarint_encode(len(rows))
-    out += _uvarint_encode(len(unknown_lines))
 
-    out += _uvarint_encode(len(packets))
+    # chunking
+    chunks: List[bytes] = []
+    uidx = 0
+    unknown_rows_total = 0
 
-    # table
-    for pkt, eidset in zip(packets, eidsets):
-        out += struct.pack("<I", 0)
-        out += struct.pack("<I", len(pkt))
-        out += _bytes_encode(eidset)
+    for i in range(0, len(rows), packet_events):
+        chunk_rows = rows[i : i + packet_events]
 
-    # packets
-    offsets: List[int] = []
-    for pkt in packets:
-        offsets.append(len(out))
-        out += pkt
+        # slice the correct unknown_lines for this chunk
+        need = sum(1 for r in chunk_rows if r is None)
+        unknown_rows_total += need
+        chunk_unknown = unknown_lines[uidx : uidx + need]
+        uidx += need
 
-    # fill offsets
-    table_start = (
-        len(MAGIC)
-        + 4 + 4 + 4
-        + 4 + len(tpl_bytes)
-        + len(_uvarint_encode(len(rows)))
-        + len(_uvarint_encode(len(unknown_lines)))
-        + len(_uvarint_encode(len(packets)))
-    )
+        blob = encode_h1m2_rowmask_blob(chunk_rows, chunk_unknown)
+        chunks.append(blob)
 
-    off = table_start
-    for o in offsets:
-        out[off:off+4] = struct.pack("<I", int(o))
-        off += 4 + 4
-        # skip eidset (uvarint len + bytes)
-        # decode length quickly:
-        # (since it's in our own output, we can walk it by reading uvarint)
-        # but simplest: recompute by encoding same eidset again
-        eidset = eidsets[(off - (table_start + 8)) // 0]  # never used; keep simple
-        # We can't safely compute without parsing, so just walk uvarint now:
-        # parse uvarint length from out starting at 'off'
-        j = off
-        shift = 0
-        val = 0
-        while True:
-            b = out[j]
-            j += 1
-            val |= (b & 0x7F) << shift
-            if (b & 0x80) == 0:
-                break
-            shift += 7
-        off = j + val
+    out += _uvarint_encode(len(chunks))
+
+    bytes_raw = 0
+    bytes_z = 0
+
+    for blob in chunks:
+        bytes_raw += len(blob)
+
+        # always zstd-compress chunk (fast + strong)
+        zpayload = _zstd_compress(blob, level=zstd_level)
+        bytes_z += len(zpayload)
+
+        flags = 1  # bit0 = zstd
+        out += struct.pack("<B", flags)
+        out += _uvarint_encode(len(blob))
+        out += _uvarint_encode(len(zpayload))
+        out += zpayload
 
     meta = PF3Meta(
-        packet_events=packet_events,
-        zstd_level=zstd_level,
-        templates_csv=template_csv_text,
-        row_count=len(rows),
-        unknown_count=len(unknown_lines),
+        rows=len(rows),
+        chunks=len(chunks),
+        unknown_rows=unknown_rows_total,
+        bytes_raw_chunks=bytes_raw,
+        bytes_zstd_chunks=bytes_z,
     )
     return bytes(out), meta

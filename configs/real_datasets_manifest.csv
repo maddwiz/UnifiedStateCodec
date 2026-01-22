@@ -1,2 +1,5 @@
 name,log,tpl
 HDFS,data/loghub/HDFS.log,data/loghub/preprocessed/HDFS.log_templates.csv
+BGL,data/loghub/BGL.log,data/loghub/preprocessed/BGL.log_templates.csv
+Apache,data/loghub/Apache.log,data/loghub/preprocessed/Apache.log_templates.csv
+Android,data/loghub/Android.log,data/loghub/preprocessed/Android.log_templates.csv

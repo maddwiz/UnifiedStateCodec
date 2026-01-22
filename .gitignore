@@ -39,3 +39,6 @@ scripts/debug_*.py
 
 # ignore patch scripts
 scripts/patch_*.py
+
+# ignore patch scripts
+scripts/patch_*.py

@@ -4,6 +4,7 @@
 results/*
 !results/bench_loghub_all.json
 !results/scoreboard_200k.md
+!results/competitor_report.md
 
 # allow CLP results folder + its json files
 !results/clp/
@@ -36,9 +37,6 @@ __pycache__/
 # temp / debug scripts
 # -----------------------
 scripts/debug_*.py
-
-# ignore patch scripts
-scripts/patch_*.py
 
 # ignore patch scripts
 scripts/patch_*.py

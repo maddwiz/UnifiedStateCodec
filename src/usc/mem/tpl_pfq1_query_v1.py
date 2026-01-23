@@ -314,6 +314,25 @@ def build_pfq1_blob(
     n = len(events)
     pkt_idx = 0
 
+
+    # UNKNOWN_ONLY_PACKET_MODE:
+    # If events are empty but unknown_lines exist, we still build ONE packet
+    # so HOT remains queryable on real logs without template coverage.
+    if n == 0 and unknown_lines:
+        raw_struct = encode_template_channels_v1_mask([], unknown_lines)
+        comp = _zstd_compress(raw_struct, level=zstd_level)
+
+        packets_comp.append(comp)
+        eidsets.append(_encode_eidset([]))
+
+        b = bloom_make(bloom_bits)
+        for ln in unknown_lines:
+            for tok in tokenize_line(ln):
+                bloom_add(b, bloom_bits, bloom_k, tok)
+        blooms.append(bytes(b))
+
+        n = 1  # force table build + offsets patching
+
     while i < n:
         chunk = events[i:i+packet_events]
         i += packet_events
@@ -328,6 +347,8 @@ def build_pfq1_blob(
         eidsets.append(_encode_eidset(eids))
 
         # keyword bloom built from rendered lines (fast + good enough)
+        # ✅ unknown_lines ALSO indexed into bloom (critical for real logs)
+        # Many real datasets have the important text in unknown_lines, not templates.
         b = bloom_make(bloom_bits)
         for eid, params in chunk:
             tpl = tmap.get(int(eid), "")
@@ -338,6 +359,11 @@ def build_pfq1_blob(
             toks = tokenize_line(line)
             for tok in toks:
                 bloom_add(b, bloom_bits, bloom_k, tok)
+        # add unknown_lines tokens into bloom (only present in pkt_idx==0)
+        for ln in ul:
+            for tok in tokenize_line(ln):
+                bloom_add(b, bloom_bits, bloom_k, tok)
+
         blooms.append(bytes(b))
 
         pkt_idx += 1
@@ -463,7 +489,7 @@ def query_keywords(
         comp = blob[pkt.offset:pkt.offset+pkt.length]
         raw = _zstd_decompress(comp)
 
-        events, _unknown = decode_h1m1_all_events(raw)
+        events, unknown_lines = decode_h1m1_all_events(raw)
 
         for eid, params in events:
             tpl = index.templates_map.get(int(eid), "")
@@ -480,6 +506,20 @@ def query_keywords(
 
             if ok:
                 hits.append(line)
+                if len(hits) >= limit:
+                    return hits
+
+
+        # ✅ scan unknown_lines for matches too (critical for real logs)
+        for ln in unknown_lines:
+            s2 = ln.lower()
+            if require_all_terms:
+                ok2 = all(t in s2 for t in terms_lc)
+            else:
+                ok2 = any(t in s2 for t in terms_lc)
+
+            if ok2:
+                hits.append(ln)
                 if len(hits) >= limit:
                     return hits
 

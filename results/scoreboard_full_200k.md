@@ -20,8 +20,8 @@ Average time over 4 queries: `ERROR`, `Exception`, `WARN`, `INFO`.
 
 | Dataset | CLP avg search time | USC avg search time | Speed Winner |
 |---|---:|---:|---|
-| Android | 0.627s | 0.038s | USC |
-| Apache | 0.473s | 0.037s | USC |
-| BGL | 0.875s | 0.037s | USC |
-| HDFS | 0.642s | 0.034s | USC |
-| Zookeeper | 0.541s | 0.030s | USC |
+| Android | 0.631s | 0.039s | USC |
+| Apache | 0.478s | 0.034s | USC |
+| BGL | 0.869s | 0.046s | USC |
+| HDFS | 0.632s | 0.039s | USC |
+| Zookeeper | 0.547s | 0.041s | USC |

@@ -1,0 +1,40 @@
+{
+  "ts": 1768980964.2418594,
+  "log": "data/loghub/HDFS.log",
+  "tpl": "data/loghub/preprocessed/HDFS.log_templates.csv",
+  "lines": 200000,
+  "raw_bytes": 28008761,
+  "packet_events": 32768,
+  "gzip_level": 9,
+  "zstd_level": 10,
+  "results": [
+    {
+      "name": "USC-COLD (USCC)",
+      "bytes": 503394,
+      "pretty": "503.39 KB",
+      "ratio": 55.63983877439938,
+      "ms": 436.74827000359073
+    },
+    {
+      "name": "zstd-10",
+      "bytes": 2072116,
+      "pretty": "2.07 MB",
+      "ratio": 13.516985052960356,
+      "ms": 195.22973502171226
+    },
+    {
+      "name": "gzip-9",
+      "bytes": 2429752,
+      "pretty": "2.43 MB",
+      "ratio": 11.52741555516777,
+      "ms": 375.5967579782009
+    },
+    {
+      "name": "USC-HOT (USCH)",
+      "bytes": 2480484,
+      "pretty": "2.48 MB",
+      "ratio": 11.291651548649376,
+      "ms": 8056.929914979264
+    }
+  ]
+}

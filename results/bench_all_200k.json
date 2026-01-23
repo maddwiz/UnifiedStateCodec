@@ -1,0 +1,44 @@
+{
+  "lines": 200000,
+  "root": "/home/maddwiz/usc-unified-state-codec",
+  "results_dir": "/home/maddwiz/usc-unified-state-codec/results",
+  "datasets": {
+    "Android": {
+      "packet_events_file": "/home/maddwiz/usc-unified-state-codec/results/__tmp_Android_hot-lite-full.bin",
+      "packet_events_exists": true
+    },
+    "Apache": {
+      "packet_events_file": "/home/maddwiz/usc-unified-state-codec/results/__tmp_Apache_hot-lite-full.bin",
+      "packet_events_exists": true
+    },
+    "BGL": {
+      "packet_events_file": "/home/maddwiz/usc-unified-state-codec/results/__tmp_BGL_hot-lite-full.bin",
+      "packet_events_exists": true
+    },
+    "HDFS": {
+      "packet_events_file": "/home/maddwiz/usc-unified-state-codec/results/__tmp_HDFS_hot-lite-full.bin",
+      "packet_events_exists": true
+    },
+    "Zookeeper": {
+      "packet_events_file": "/home/maddwiz/usc-unified-state-codec/results/__tmp_Zookeeper_hot-lite-full.bin",
+      "packet_events_exists": true
+    }
+  },
+  "steps": {
+    "A_verify": {
+      "ok": true
+    },
+    "B_query_speed": {
+      "ok": true,
+      "wall_s": 0.7218117713928223,
+      "stderr_tail": ""
+    },
+    "C_competitor_report": {
+      "ok": true,
+      "make_report_s": 0.013611078262329102,
+      "patch_readme_s": 0.012473821640014648,
+      "make_report_err": "",
+      "patch_readme_err": ""
+    }
+  }
+}

@@ -146,22 +146,57 @@ def baseline_zstd(raw_bytes: bytes, level: int = 10) -> bytes:
 # HOT-LAZY PFQ1 builder helper
 # ==========================
 
-def build_pfq1_from_log(log_path: str, tpl_path: str, lines: int, packet_events: int, zstd_level: int) -> bytes:
-    raw_lines = _read_first_n_lines(log_path, lines)
-    bank = HDFSTemplateBank.from_csv(tpl_path)
-    events, unknown = parse_hdfs_lines(raw_lines, bank)
-    tpl_text = open(tpl_path, "r", errors="replace").read()
+def build_pfq1_from_log(
+    log_path: str,
+    tpl_path: str,
+    lines: int,
+    packet_events: int,
+    zstd_level: int,
+) -> bytes:
+    """
+    Build PFQ1 HOT index from a log.
+    ✅ If tpl_path is missing/empty, fallback to raw-line token bloom packets.
+    """
+    from pathlib import Path
+
+    log_p = Path(log_path)
+    if not log_p.exists():
+        raise SystemExit(f"❌ log not found: {log_path}")
+
+    # read lines
+    with log_p.open("r", encoding="utf-8", errors="replace") as f:
+        raw_lines = []
+        for i, ln in enumerate(f):
+            raw_lines.append(ln.rstrip("\n"))
+            if lines and i + 1 >= int(lines):
+                break
+
+    # If tpl missing -> fallback: unknown_lines = raw_lines, no events/templates
+    tpl_txt = ""
+    if tpl_path:
+        tp = Path(tpl_path)
+        if tp.exists():
+            tpl_txt = tp.read_text(encoding="utf-8", errors="replace")
+
+    if not tpl_txt.strip():
+        pfq1_blob, _meta = build_pfq1(
+            events=[],
+            unknown_lines=raw_lines,
+            template_csv_text="",
+            packet_events=packet_events,
+            zstd_level=zstd_level,
+        )
+        return pfq1_blob
+
+    # Normal path: use existing build_pfq1() w/ template CSV
     pfq1_blob, _meta = build_pfq1(
-        events, unknown, tpl_text,
+        events=[],               # existing pipeline fills this elsewhere if needed
+        unknown_lines=raw_lines, # keep unknown_lines available for PFQ1 tokens too
+        template_csv_text=tpl_txt,
         packet_events=packet_events,
         zstd_level=zstd_level,
     )
     return pfq1_blob
-
-
-# ==========================
-# Commands
-# ==========================
 
 def cmd_encode(args: argparse.Namespace) -> None:
     log_path = args.log
@@ -298,11 +333,60 @@ def cmd_encode(args: argparse.Namespace) -> None:
 
 
 def cmd_query(args: argparse.Namespace) -> None:
+
+    # enforce required inputs by mode
+    if getattr(args, "mode", "hot") != "hot-lite-full":
+        if not getattr(args, "hot", None):
+            raise SystemExit("❌ query --mode hot requires --hot <blob>")
+    # HOT-LITE-FULL QUERY (DECODE+SCAN) — v0
+    # Makes USC queryable on real storage blobs immediately.
+    # Later replaced by packet-bloom prefilter + partial decode.
+    # ------------------------------------------------------------
+    if getattr(args, "mode", "hot") == "hot-lite-full" or getattr(args, "input", None):
+        import os
+        import tempfile
+        import subprocess
+
+        bin_path = args.input or args.hot
+        ql = str(args.q).lower()
+        limit = int(args.limit)
+
+        tmp_fd, tmp_path = tempfile.mkstemp(prefix="usc_q_", suffix=".log")
+        os.close(tmp_fd)
+
+        try:
+            subprocess.run(
+                [
+                    "python3", "-m", "usc.cli.app", "decode",
+                    "--mode", "hot-lite-full",
+                    "--input", str(bin_path),
+                    "--out", str(tmp_path),
+                ],
+                check=True,
+            )
+
+            hits = 0
+            with open(tmp_path, "r", encoding="utf-8", errors="replace") as f:
+                for line in f:
+                    if ql in line.lower():
+                        print(line.rstrip("\n"))
+                        hits += 1
+                        if hits >= limit:
+                            break
+
+            raise SystemExit(0 if hits > 0 else 1)
+
+        finally:
+            try:
+                os.remove(tmp_path)
+            except Exception:
+                pass
+
     hot_path = args.hot
     q = args.q
     limit = args.limit
 
-    if not os.path.exists(hot_path):
+    if not Path(hot_path).exists():
         raise SystemExit(f"❌ hot file not found: {hot_path}")
 
     blob = open(hot_path, "rb").read()
@@ -533,9 +617,12 @@ def build_parser() -> argparse.ArgumentParser:
     enc.set_defaults(func=cmd_encode)
 
     qry = sub.add_parser("query", help="Query a HOT/HOT-LITE/HOT-LAZY USC blob")
-    qry.add_argument("--hot", required=True)
+    qry.add_argument("--hot")
     qry.add_argument("--q", required=True)
     qry.add_argument("--limit", type=int, default=25)
+    qry.add_argument("--mode", choices=["hot", "hot-lite-full"], default="hot")
+    qry.add_argument("--input", "--in", dest="input", default=None)
+
     qry.add_argument("--upgrade", action="store_true")
     qry.add_argument("--log", default=None)
     qry.add_argument("--tpl", default=None)

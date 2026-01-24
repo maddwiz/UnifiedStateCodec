@@ -23,6 +23,7 @@ from usc.mem.tpl_query_router_v1 import query_router_v1
 from usc.api.hdfs_template_codec_v1m_bundle import bundle_encode_and_compress_v1m
 
 from usc.api.stream_codec_v3d_auto import encode_stream_auto
+from usc.cli.decode_auto_cmd import add_decode_auto_subcommand
 
 
 MAGIC_HOT = b"USCH"   # PF1 + optional PFQ1 container
@@ -596,6 +597,7 @@ def build_parser() -> argparse.ArgumentParser:
         description="Unified State Codec (USC) — Hot/Cool/Stream compression + query",
     )
     sub = p.add_subparsers(dest="cmd", required=True)
+    add_decode_auto_subcommand(sub)
 
     # -----------------------
     # decode (PF3 hot-lite)
